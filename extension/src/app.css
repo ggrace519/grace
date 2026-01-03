@@ -56,13 +56,21 @@
   font-family: -apple-system, ui-sans-serif, system-ui, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif !important;
 }
 
-#extension-app #openwebui-response-modal > div,
-#extension-app [role="dialog"][aria-modal="true"] > div {
+#extension-app #openwebui-response-modal > .openwebui-response-container {
   position: relative !important;
-  width: 100% !important;
-  max-width: 56rem !important;
+  width: min(96vw, 72rem) !important;
+  max-width: 72rem !important;
+  height: 100% !important;
   margin: auto !important;
-  padding: 0 1rem 8rem 1rem !important;
+  padding: 1.25rem !important;
+  z-index: 1 !important;
+}
+
+#extension-app #openwebui-response-modal .openwebui-response-backdrop {
+  position: absolute !important;
+  inset: 0 !important;
+  background: transparent !important;
+  z-index: 0 !important;
 }
 
 #extension-app #openwebui-response-modal [role="dialog"],
@@ -74,9 +82,9 @@
   background-color: rgba(38, 38, 38, 0.7) !important;
   backdrop-filter: blur(16px) !important;
   -webkit-backdrop-filter: blur(16px) !important;
-  border-radius: 1rem !important;
-  padding: 1.25rem 1.5rem !important;
-  max-height: 85vh !important;
+  border-radius: 0.9rem !important;
+  padding: 1rem 1.25rem !important;
+  max-height: 92vh !important;
   overflow: hidden !important;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7) !important;
   border: 1px solid rgba(55, 65, 81, 1) !important;
@@ -245,4 +253,92 @@
   height: auto;
   border-radius: 0.5rem;
   margin: 1em 0;
+}
+
+/* Thinking Animation */
+.thinking-dots {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.thinking-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background-color: rgb(212 212 212);
+  animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinking-pulse {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Model Select Dropdown - Dark gray background to match modal */
+/* Note: Native browser dropdowns have limited styling support.
+   The select element itself can be styled, but the dropdown options
+   are rendered by the OS and may not respect all CSS properties. */
+
+/* Style the select element itself (what's shown when closed) */
+#open-webui-model-input,
+select#open-webui-model-input,
+[id="open-webui-model-input"],
+select[id="open-webui-model-input"] {
+  color: rgb(245 245 245) !important;
+  background-color: rgba(31, 41, 55, 0.5) !important;
+  -webkit-text-fill-color: rgb(245 245 245) !important;
+}
+
+/* Style options (limited browser support - OS controls appearance) */
+#open-webui-model-input option,
+select#open-webui-model-input option,
+[id="open-webui-model-input"] option,
+select[id="open-webui-model-input"] option {
+  color: rgb(245 245 245) !important;
+  background-color: rgba(31, 41, 55, 0.8) !important;
+  -webkit-text-fill-color: rgb(245 245 245) !important;
+}
+
+/* Focus state */
+#open-webui-model-input:focus,
+select#open-webui-model-input:focus,
+[id="open-webui-model-input"]:focus {
+  color: rgb(245 245 245) !important;
+  background-color: rgba(31, 41, 55, 0.5) !important;
+  -webkit-text-fill-color: rgb(245 245 245) !important;
+}
+
+/* Target the placeholder/empty option specifically */
+#open-webui-model-input option[value=""],
+select#open-webui-model-input option[value=""] {
+  color: rgb(245 245 245) !important;
+  background-color: rgba(31, 41, 55, 0.8) !important;
+  -webkit-text-fill-color: rgb(245 245 245) !important;
+}
+
+/* Additional specificity for any parent containers */
+* #open-webui-model-input,
+* select#open-webui-model-input {
+  color: rgb(245 245 245) !important;
+  background-color: rgba(31, 41, 55, 0.5) !important;
+  -webkit-text-fill-color: rgb(245 245 245) !important;
 }

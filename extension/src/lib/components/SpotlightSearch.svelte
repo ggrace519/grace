@@ -15,12 +15,27 @@
   let showConfig = true;
   let showResponse = false; // ENHANCEMENT: Controls response popup visibility
   let responseText = ""; // ENHANCEMENT: Current streaming response text
+  let thinkingText = ""; // ENHANCEMENT: Thinking tokens from thinking models
+  let isThinking = false; // ENHANCEMENT: Whether we're currently in thinking phase
+  let thinkingExpanded = false; // ENHANCEMENT: Whether thinking text is expanded
   let responseQuery = ""; // ENHANCEMENT: Original query that triggered response
   let followUpInput = ""; // ENHANCEMENT: Input field for follow-up questions
   let conversationHistory: Array<{role: string, content: string}> = []; // ENHANCEMENT: Multi-turn conversation history
   let isStreaming = false; // ENHANCEMENT: Tracks if response is currently streaming
   let errorMessage = ""; // ENHANCEMENT: Error message for rate limits, etc.
   let showError = false; // ENHANCEMENT: Controls error message visibility
+
+  const closeResponseModal = () => {
+    showResponse = false;
+    responseText = "";
+    thinkingText = "";
+    isThinking = false;
+    thinkingExpanded = false;
+    responseQuery = "";
+    followUpInput = "";
+    conversationHistory = [];
+    isStreaming = false;
+  };
 
   let url = "";
   let key = "";
@@ -29,12 +44,13 @@
   let searchValue = "";
   let models = [];
   let responseContainer: HTMLElement | null = null;
+  let userScrolledUp = false; // Track if user has manually scrolled up
 
   const resetConfig = () => {
     console.log("resetConfig");
 
     if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available - cannot reset config");
+      console.debug("Extension: Chrome APIs not available - cannot reset config");
       return;
     }
 
@@ -43,10 +59,9 @@
         console.log("Value is cleared");
       });
     } catch (error) {
-      const errorMsg = error?.message || String(error);
-      if (errorMsg.includes("Extension context invalidated") || 
-          errorMsg.includes("Cannot read properties of undefined")) {
-        console.warn("Extension: Chrome storage API not available - extension may have been reloaded");
+      if (isContextInvalidatedError(error)) {
+        // Expected when extension is reloaded - use debug level
+        console.debug("Extension: Chrome storage API not available - extension may have been reloaded");
       } else {
         console.log(error);
       }
@@ -121,7 +136,7 @@
     }
 
     if (!isChromeAPIAvailable()) {
-      console.error("Extension: Chrome APIs not available - cannot save config");
+      console.debug("Extension: Chrome APIs not available - cannot save config");
       return;
     }
 
@@ -152,9 +167,9 @@
       }
     } catch (error) {
       const errorMsg = error?.message || String(error);
-      if (errorMsg.includes("Extension context invalidated") || 
-          errorMsg.includes("Cannot read properties of undefined")) {
-        console.warn("Extension: Chrome APIs not available - extension may have been reloaded");
+      if (isContextInvalidatedError(error)) {
+        // Expected when extension is reloaded - use debug level
+        console.debug("Extension: Chrome APIs not available - extension may have been reloaded");
       } else {
         console.log(error);
       }
@@ -167,7 +182,7 @@
   // Function to toggle search interface
   const toggleSearch = async () => {
     if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available - cannot get selection");
+      console.debug("Extension: Chrome APIs not available - cannot get selection");
       show = !show;
       return;
     }
@@ -181,10 +196,9 @@
         searchValue = response.data;
       }
     } catch (error) {
-      const errorMsg = error?.message || String(error);
-      if (errorMsg.includes("Extension context invalidated") || 
-          errorMsg.includes("Cannot read properties of undefined")) {
-        console.warn("Extension: Chrome runtime API not available");
+      if (isContextInvalidatedError(error)) {
+        // Expected when extension is reloaded - use debug level
+        console.debug("Extension: Chrome runtime API not available");
       } else {
         console.log("catch", error);
       }
@@ -268,10 +282,9 @@
           }
         }
       } catch (error) {
-        const errorMsg = error?.message || String(error);
-        if (errorMsg.includes("Extension context invalidated") || 
-            errorMsg.includes("Cannot read properties of undefined")) {
-          console.warn("Extension: Chrome storage API not available - extension may have been reloaded");
+        if (isContextInvalidatedError(error)) {
+          // Expected when extension is reloaded - use debug level
+          console.debug("Extension: Chrome storage API not available - extension may have been reloaded");
         } else {
           console.error("Extension: Error getting config:", error);
         }
@@ -288,6 +301,9 @@
     // Initialize conversation with specialized system prompt for page summarization
     responseQuery = "Summarize this page";
     responseText = "";
+    thinkingText = "";
+    isThinking = true; // Start in thinking mode
+    thinkingExpanded = false;
     conversationHistory = [
       {
         role: "system",
@@ -300,6 +316,7 @@
     ];
     showResponse = true;
     isStreaming = true;
+    userScrolledUp = false; // Reset scroll flag for new stream
     showError = false;
     errorMessage = "";
 
@@ -343,13 +360,12 @@
                   let data = JSON.parse(line.replace(/^data: /, ""));
                   if (!("request_id" in data)) {
                     const content = data.choices[0].delta.content ?? "";
-                    responseText += content;
+                    processStreamingContent(content);
                     
-                    if (responseContainer) {
-                      setTimeout(() => {
-                        responseContainer.scrollTop = responseContainer.scrollHeight;
-                      }, 0);
-                    }
+                    // Smart auto-scroll (only if user is near bottom)
+                    setTimeout(() => {
+                      smartScrollToBottom(responseContainer);
+                    }, 0);
                   }
                 }
               }
@@ -361,20 +377,32 @@
         
         // Add assistant response to conversation history after streaming completes
         try {
-          if (responseText) {
+          // If we're still in thinking mode when streaming completes, 
+          // move thinking text to response (no separator was detected)
+          if (isThinking && thinkingText && !responseText) {
+            responseText = thinkingText;
+            thinkingText = "";
+            isThinking = false;
+          }
+          
+          // Combine thinking and response for history (if thinking exists)
+          const fullResponse = thinkingText ? `${thinkingText}\n\n${responseText}` : responseText;
+          if (fullResponse) {
             const alreadyInHistory = conversationHistory.some(
-              m => m.role === "assistant" && m.content === responseText
+              m => m.role === "assistant" && m.content === fullResponse
             );
             
             if (!alreadyInHistory) {
               conversationHistory = [...conversationHistory, {
                 role: "assistant",
-                content: responseText,
+                content: fullResponse,
               }];
             }
           }
           isStreaming = false;
           responseText = "";
+          thinkingText = "";
+          isThinking = false;
           
           // Focus the follow-up input after response completes
           setTimeout(() => {
@@ -399,6 +427,14 @@
         }, 5000);
       }
     } catch (error) {
+      // Extension context invalidated errors happen when extension is reloaded - handle gracefully
+      if (isContextInvalidatedError(error)) {
+        // Extension was reloaded - just stop streaming, don't show error
+        isStreaming = false;
+        showResponse = false;
+        return;
+      }
+      
       console.error("Extension: Error summarizing page:", error);
       
       // Check if it's a rate limit error
@@ -510,6 +546,9 @@
     // Initialize conversation with specialized system prompt for text explanation
     responseQuery = selectedText.substring(0, 100);
     responseText = "";
+    thinkingText = "";
+    isThinking = true; // Start in thinking mode
+    thinkingExpanded = false;
     conversationHistory = [
       {
         role: "system",
@@ -522,6 +561,7 @@
     ];
     showResponse = true;
     isStreaming = true;
+    userScrolledUp = false; // Reset scroll flag for new stream
     showError = false;
     errorMessage = "";
 
@@ -565,13 +605,12 @@
                   let data = JSON.parse(line.replace(/^data: /, ""));
                   if (!("request_id" in data)) {
                     const content = data.choices[0].delta.content ?? "";
-                    responseText += content;
+                    processStreamingContent(content);
                     
-                    if (responseContainer) {
-                      setTimeout(() => {
-                        responseContainer.scrollTop = responseContainer.scrollHeight;
-                      }, 0);
-                    }
+                    // Smart auto-scroll (only if user is near bottom)
+                    setTimeout(() => {
+                      smartScrollToBottom(responseContainer);
+                    }, 0);
                   }
                 }
               }
@@ -583,20 +622,32 @@
         
         // Add assistant response to conversation history after streaming completes
         try {
-          if (responseText) {
+          // If we're still in thinking mode when streaming completes, 
+          // move thinking text to response (no separator was detected)
+          if (isThinking && thinkingText && !responseText) {
+            responseText = thinkingText;
+            thinkingText = "";
+            isThinking = false;
+          }
+          
+          // Combine thinking and response for history (if thinking exists)
+          const fullResponse = thinkingText ? `${thinkingText}\n\n${responseText}` : responseText;
+          if (fullResponse) {
             const alreadyInHistory = conversationHistory.some(
-              m => m.role === "assistant" && m.content === responseText
+              m => m.role === "assistant" && m.content === fullResponse
             );
             
             if (!alreadyInHistory) {
               conversationHistory = [...conversationHistory, {
                 role: "assistant",
-                content: responseText,
+                content: fullResponse,
               }];
             }
           }
           isStreaming = false;
           responseText = "";
+          thinkingText = "";
+          isThinking = false;
           
           // Focus the follow-up input after response completes
           setTimeout(() => {
@@ -622,9 +673,7 @@
       }
     } catch (error) {
       // Extension context invalidated errors happen when extension is reloaded - handle gracefully
-      const errorMsg = error?.message || String(error);
-      
-      if (errorMsg.includes("Extension context invalidated")) {
+      if (isContextInvalidatedError(error)) {
         // Extension was reloaded - just stop streaming, don't show error
         isStreaming = false;
         showResponse = false;
@@ -671,7 +720,7 @@
     }
 
     if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available - cannot continue in OpenWebUI");
+      console.debug("Extension: Chrome APIs not available - cannot continue in OpenWebUI");
       // Fallback: just open the URL
       window.open(url, "_blank");
       return;
@@ -698,19 +747,17 @@
               currentKey = storedConfig.key; // Use as-is (backward compatibility)
             }
           } catch (error) {
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes("Extension context invalidated") || 
-                errorMsg.includes("Cannot read properties of undefined")) {
-              console.warn("Extension: Chrome runtime API not available");
+            if (isContextInvalidatedError(error)) {
+              // Expected when extension is reloaded - use debug level
+              console.debug("Extension: Chrome runtime API not available");
             }
             currentKey = storedConfig.key; // Use as-is (backward compatibility)
           }
         }
       } catch (error) {
-        const errorMsg = error?.message || String(error);
-        if (errorMsg.includes("Extension context invalidated") || 
-            errorMsg.includes("Cannot read properties of undefined")) {
-          console.warn("Extension: Chrome storage API not available");
+        if (isContextInvalidatedError(error)) {
+          // Expected when extension is reloaded - use debug level
+          console.debug("Extension: Chrome storage API not available");
         } else {
           console.error("Extension: Error getting config:", error);
         }
@@ -808,7 +855,11 @@
 
     // Clear current streaming response and start new one
     responseText = "";
+    thinkingText = "";
+    isThinking = true; // Start in thinking mode
+    thinkingExpanded = false;
     isStreaming = true;
+    userScrolledUp = false; // Reset scroll flag for new stream
     
     // Focus the input after a short delay
     setTimeout(() => {
@@ -896,13 +947,12 @@
                   let data = JSON.parse(line.replace(/^data: /, ""));
                   if (!("request_id" in data)) {
                     const content = data.choices[0].delta.content ?? "";
-                    responseText += content;
+                    processStreamingContent(content);
                     
-                    if (responseContainer) {
-                      setTimeout(() => {
-                        responseContainer.scrollTop = responseContainer.scrollHeight;
-                      }, 0);
-                    }
+                    // Smart auto-scroll (only if user is near bottom)
+                    setTimeout(() => {
+                      smartScrollToBottom(responseContainer);
+                    }, 0);
                   }
                 }
               }
@@ -984,6 +1034,54 @@
     }
   };
 
+  // ========================================================================
+  // ENHANCEMENT: Smart Auto-Scroll
+  // ========================================================================
+  // Only auto-scrolls if the user is already near the bottom of the container.
+  // This allows users to scroll up and read without being forced back to bottom.
+  // ========================================================================
+  const smartScrollToBottom = (container: HTMLElement | null): void => {
+    if (!container) return;
+    
+    // Check if user is near the bottom (within 100px threshold)
+    const scrollThreshold = 100;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    
+    // Only auto-scroll if user is near the bottom
+    if (distanceFromBottom <= scrollThreshold) {
+      container.scrollTop = container.scrollHeight;
+      userScrolledUp = false; // Reset flag if we auto-scrolled
+    } else {
+      userScrolledUp = true; // User has scrolled up
+    }
+  };
+
+  // ========================================================================
+  // ENHANCEMENT: Thinking Token Detection and Separation
+  // ========================================================================
+  // Detects when thinking tokens end and actual response begins.
+  // Common pattern: thinking text followed by \n\n separator.
+  // ========================================================================
+  const processStreamingContent = (content: string): void => {
+    if (isThinking) {
+      // Check for double newline separator (most common pattern)
+      const doubleNewlineIndex = content.indexOf('\n\n');
+      
+      if (doubleNewlineIndex !== -1) {
+        // Found transition point - split thinking from response
+        thinkingText += content.substring(0, doubleNewlineIndex);
+        responseText = content.substring(doubleNewlineIndex + 2); // Skip the \n\n
+        isThinking = false;
+      } else {
+        // Still in thinking phase - accumulate thinking text
+        thinkingText += content;
+      }
+    } else {
+      // Already in response phase - accumulate response text
+      responseText += content;
+    }
+  };
+
   // Helper function to check if Chrome APIs are available
   const isChromeAPIAvailable = (): boolean => {
     try {
@@ -997,6 +1095,15 @@
     } catch {
       return false;
     }
+  };
+
+  // Helper function to check if an error is an expected "Extension context invalidated" error
+  // These errors occur when the extension is reloaded and are not actual errors
+  const isContextInvalidatedError = (error: any): boolean => {
+    const errorMsg = error?.message || String(error);
+    return errorMsg.includes("Extension context invalidated") || 
+           errorMsg.includes("Cannot read properties of undefined") ||
+           errorMsg.includes("Chrome APIs not available");
   };
 
   onMount(async () => {
@@ -1144,7 +1251,7 @@
         let currentModel = model;
 
         if (!isChromeAPIAvailable()) {
-          console.warn("Extension: Chrome APIs not available - using cached config");
+          console.debug("Extension: Chrome APIs not available - using cached config");
           // Use existing values if Chrome APIs aren't available
           if (!currentUrl || !currentKey || !currentModel) {
             console.warn("Extension: Missing configuration. Please configure the extension first.");
@@ -1179,10 +1286,9 @@
                   key = decryptionResponse.decrypted;
                 }
               } catch (error) {
-                const errorMsg = error?.message || String(error);
-                if (errorMsg.includes("Extension context invalidated") || 
-                    errorMsg.includes("Cannot read properties of undefined")) {
-                  console.warn("Extension: Chrome runtime API not available");
+                if (isContextInvalidatedError(error)) {
+                  // Expected when extension is reloaded - use debug level
+                  console.debug("Extension: Chrome runtime API not available");
                 } else {
                   console.error("Extension: Error decrypting API key:", error);
                 }
@@ -1192,11 +1298,9 @@
             }
           } catch (error) {
             // Extension context might be invalidated - use existing values
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes("Extension context invalidated") || 
-                errorMsg.includes("Cannot read properties of undefined")) {
-              // Silently use existing config values
-              console.warn("Extension: Chrome storage API not available - using cached config");
+            if (isContextInvalidatedError(error)) {
+              // Expected when extension is reloaded - use debug level
+              console.debug("Extension: Chrome storage API not available - using cached config");
             } else {
               console.log("Failed to get stored config:", error);
             }
@@ -1210,7 +1314,7 @@
         }
 
         if (!isChromeAPIAvailable()) {
-          console.warn("Extension: Chrome APIs not available - cannot get selection");
+          console.debug("Extension: Chrome APIs not available - cannot get selection");
           return;
         }
 
@@ -1223,6 +1327,9 @@
             // Initialize conversation
             responseQuery = response.data;
             responseText = "";
+            thinkingText = "";
+            isThinking = true; // Start in thinking mode
+            thinkingExpanded = false;
             // Reassign to ensure reactivity
             conversationHistory = [
               {
@@ -1236,6 +1343,7 @@
             ];
             showResponse = true;
             isStreaming = true;
+            userScrolledUp = false; // Reset scroll flag for new stream
 
             // Store the active element before making API call (optional - for writing to input)
             const activeElement = document.activeElement;
@@ -1302,14 +1410,12 @@
                         } else {
                           const content = data.choices[0].delta.content ?? "";
                           // Update popup display
-                          responseText += content;
+                          processStreamingContent(content);
                           
-                          // Auto-scroll to bottom as content streams in
-                          if (responseContainer) {
-                            setTimeout(() => {
-                              responseContainer.scrollTop = responseContainer.scrollHeight;
-                            }, 0);
-                          }
+                          // Smart auto-scroll (only if user is near bottom)
+                          setTimeout(() => {
+                            smartScrollToBottom(responseContainer);
+                          }, 0);
                           
                           // Optionally also write to input field if one was focused
                           if (targetId && content && isChromeAPIAvailable()) {
@@ -1380,12 +1486,10 @@
             // Silently ignore if no text is selected - user might have accidentally triggered the shortcut
           }
         } catch (error) {
-          const errorMsg = error?.message || String(error);
-          
           // Check if it's an extension context invalidated error
-          if (errorMsg.includes("Extension context invalidated") || 
-              errorMsg.includes("Cannot read properties of undefined")) {
-            console.warn("Extension: Chrome APIs not available - extension may have been reloaded");
+          if (isContextInvalidatedError(error)) {
+            // Expected when extension is reloaded - use debug level
+            console.debug("Extension: Chrome APIs not available - extension may have been reloaded");
             isStreaming = false;
             showResponse = false;
             return;
@@ -1434,7 +1538,7 @@
 
     // Check Chrome API availability before using
     if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available for config loading");
+      console.debug("Extension: Chrome APIs not available for config loading");
       showConfig = true;
       return;
     }
@@ -1442,10 +1546,9 @@
     try {
       _storageCache = await chrome.storage.local.get();
     } catch (error) {
-      const errorMsg = error?.message || String(error);
-      if (errorMsg.includes("Extension context invalidated") || 
-          errorMsg.includes("Cannot read properties of undefined")) {
-        console.warn("Extension: Chrome storage API not available - extension may have been reloaded");
+      if (isContextInvalidatedError(error)) {
+        // Expected when extension is reloaded - use debug level
+        console.debug("Extension: Chrome storage API not available - extension may have been reloaded");
       } else {
         console.error("Extension: Error getting config:", error);
       }
@@ -1472,10 +1575,9 @@
               key = decryptionResponse.decrypted;
             }
           } catch (error) {
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes("Extension context invalidated") || 
-                errorMsg.includes("Cannot read properties of undefined")) {
-              console.warn("Extension: Chrome runtime API not available - using stored key as-is");
+            if (isContextInvalidatedError(error)) {
+              // Expected when extension is reloaded - use debug level
+              console.debug("Extension: Chrome runtime API not available - using stored key as-is");
             } else {
               console.error("Extension: Error decrypting API key:", error);
             }
@@ -1686,14 +1788,15 @@
                 </div>
                 <select
                   id="open-webui-model-input"
-                  class="tlwd-p-0 tlwd-m-0 tlwd-text-xl tlwd-w-full tlwd-font-medium tlwd-bg-transparent tlwd-border-none placeholder:tlwd-text-gray-500 tlwd-text-neutral-100 tlwd-outline-none"
+                  class="tlwd-p-0 tlwd-m-0 tlwd-text-xl tlwd-w-full tlwd-font-medium tlwd-bg-gray-800/50 tlwd-border-none tlwd-text-neutral-100 tlwd-outline-none"
+                  style="color: rgb(245 245 245) !important; background-color: rgba(31, 41, 55, 0.5) !important; -webkit-text-fill-color: rgb(245 245 245) !important;"
                   bind:value={model}
                   autocomplete="off"
                   required
                 >
-                  <option value="">Select a model</option>
+                  <option value="" style="color: rgb(245 245 245) !important; background-color: rgba(31, 41, 55, 0.8) !important;">Select a model</option>
                   {#each models as model}
-                    <option value={model.id}>{model.name ?? model.id}</option>
+                    <option value={model.id} style="color: rgb(245 245 245) !important; background-color: rgba(31, 41, 55, 0.8) !important;">{model.name ?? model.id}</option>
                   {/each}
                 </select>
                 <button
@@ -1817,43 +1920,39 @@
      ======================================================================== -->
 <!-- Response Popup -->
 {#if showResponse}
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div
-    role="dialog"
-    aria-modal="true"
     id="openwebui-response-modal"
     class="tlwd-fixed tlwd-top-0 tlwd-right-0 tlwd-left-0 tlwd-bottom-0 tlwd-w-full tlwd-min-h-screen tlwd-h-screen tlwd-flex tlwd-justify-center tlwd-z-[9999999999] tlwd-overflow-hidden tlwd-overscroll-contain"
-            on:mousedown={() => {
-              showResponse = false;
-              responseText = "";
-              responseQuery = "";
-              followUpInput = "";
-              conversationHistory = [];
-              isStreaming = false;
-            }}
   >
-    <div class="tlwd-m-auto tlwd-max-w-4xl tlwd-w-full tlwd-pb-32 tlwd-px-4">
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div
+      class="openwebui-response-backdrop"
+      role="button"
+      tabindex="0"
+      aria-label="Close response"
+      on:click={closeResponseModal}
+      on:keydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          closeResponseModal();
+        }
+      }}
+    ></div>
+    <div class="openwebui-response-container tlwd-m-auto tlwd-max-w-4xl tlwd-w-full tlwd-pb-1 tlwd-px-2">
       <div
         role="dialog"
         aria-modal="true"
-        class="tlwd-w-full tlwd-flex tlwd-flex-col tlwd-justify-between tlwd-py-5 tlwd-px-6 tlwd-rounded-2xl tlwd-outline tlwd-outline-1 tlwd-outline-gray-850 tlwd-backdrop-blur-3xl tlwd-bg-gray-850/70 shadow-4xl modal-animation tlwd-max-h-[85vh] tlwd-overflow-hidden tlwd-flex tlwd-flex-col"
-        on:mousedown={(e) => {
-          e.stopPropagation();
-        }}
+        class="tlwd-w-full tlwd-flex tlwd-flex-col tlwd-justify-between tlwd-py-1 tlwd-px-3 tlwd-rounded-lg tlwd-outline tlwd-outline-1 tlwd-outline-gray-850 tlwd-backdrop-blur-3xl tlwd-bg-gray-850/70 shadow-4xl modal-animation tlwd-max-h-[96vh] tlwd-overflow-hidden tlwd-flex tlwd-flex-col"
       >
         <!-- Header -->
-        <div class="tlwd-flex tlwd-items-center tlwd-justify-between tlwd-mb-5 tlwd-pb-4 tlwd-border-b tlwd-border-gray-700">
-          <div class="tlwd-flex tlwd-items-center tlwd-gap-2">
+        <div class="tlwd-flex tlwd-items-center tlwd-justify-between tlwd-mb-1 tlwd-pb-1.5 tlwd-border-b tlwd-border-gray-700">
+          <div class="tlwd-flex tlwd-items-center tlwd-gap-1.5">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               fill="none"
               viewBox="0 0 24 24"
               stroke-width={2.5}
               stroke="currentColor"
-              class="tlwd-size-5 tlwd-text-neutral-300"
+              class="tlwd-size-4 tlwd-text-neutral-300"
             >
               <path
                 stroke-linecap="round"
@@ -1861,18 +1960,11 @@
                 d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
               />
             </svg>
-            <h3 class="tlwd-text-xl tlwd-font-semibold tlwd-text-neutral-100">AI Response</h3>
+            <h3 class="tlwd-text-base tlwd-font-semibold tlwd-text-neutral-100">AI Response</h3>
           </div>
           <button
             class="tlwd-flex tlwd-items-center tlwd-bg-transparent tlwd-text-neutral-300 hover:tlwd-text-neutral-100 tlwd-cursor-pointer tlwd-p-1 tlwd-outline-none tlwd-border-none tlwd-transition-colors"
-            on:click={() => {
-              showResponse = false;
-              responseText = "";
-              responseQuery = "";
-              followUpInput = "";
-              conversationHistory = [];
-              isStreaming = false;
-            }}
+            on:click={closeResponseModal}
             type="button"
           >
             <svg
@@ -1894,20 +1986,60 @@
 
         <!-- Conversation History -->
         <div 
-          class="tlwd-flex-1 tlwd-overflow-y-auto tlwd-pr-2 tlwd-mb-4"
+          class="tlwd-relative tlwd-flex-1 tlwd-overflow-y-auto tlwd-pr-1 tlwd-mb-1.5"
           bind:this={responseContainer}
+          on:scroll={(e) => {
+            // Track if user manually scrolls up
+            const container = e.currentTarget;
+            if (container) {
+              const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+              const scrollThreshold = 100;
+              userScrolledUp = distanceFromBottom > scrollThreshold;
+            }
+          }}
         >
+          <!-- Scroll to Bottom Button (shown when user scrolls up) -->
+          {#if userScrolledUp && isStreaming}
+            <div class="tlwd-absolute tlwd-bottom-4 tlwd-right-4 tlwd-z-10">
+              <button
+                type="button"
+                class="tlwd-p-3 tlwd-bg-blue-600 hover:tlwd-bg-blue-700 tlwd-text-white tlwd-rounded-full tlwd-shadow-lg tlwd-transition-colors tlwd-outline-none tlwd-border-none tlwd-cursor-pointer"
+                on:click={() => {
+                  if (responseContainer) {
+                    responseContainer.scrollTop = responseContainer.scrollHeight;
+                    userScrolledUp = false;
+                  }
+                }}
+                title="Scroll to bottom"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width={2.5}
+                  stroke="currentColor"
+                  class="tlwd-size-5"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3"
+                  />
+                </svg>
+              </button>
+            </div>
+          {/if}
           {#each conversationHistory as message, index}
             {#if message.role === "user"}
-              <div class="tlwd-mb-5">
-                <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-2 tlwd-font-medium">You:</div>
-                <div class="tlwd-text-base tlwd-text-neutral-100 tlwd-bg-gray-800/50 tlwd-rounded-lg tlwd-p-4">
+              <div class="tlwd-mb-3">
+                <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-1 tlwd-font-medium">You:</div>
+                <div class="tlwd-text-base tlwd-text-neutral-100 tlwd-bg-gray-800/50 tlwd-rounded-lg tlwd-p-3">
                   {message.content}
                 </div>
               </div>
             {:else if message.role === "assistant"}
-              <div class="tlwd-mb-5">
-                <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-2 tlwd-font-medium">Assistant:</div>
+              <div class="tlwd-mb-3">
+                <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-1 tlwd-font-medium">Assistant:</div>
                 <div class="tlwd-text-base tlwd-text-neutral-100 tlwd-leading-relaxed markdown-content">
                   {@html renderMarkdown(message.content)}
                 </div>
@@ -1916,18 +2048,64 @@
           {/each}
           
           <!-- Current streaming response (only show if streaming) -->
-          {#if responseText && isStreaming}
-            <div class="tlwd-mb-5">
-              <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-2 tlwd-font-medium">Assistant:</div>
-              <div class="tlwd-text-base tlwd-text-neutral-100 tlwd-leading-relaxed markdown-content">
-                {@html renderMarkdown(responseText)}
-                <span class="tlwd-inline-block tlwd-w-2 tlwd-h-4 tlwd-bg-neutral-300 tlwd-ml-1 tlwd-animate-pulse">|</span>
-              </div>
-            </div>
-          {:else if isStreaming && !responseText}
-            <div class="tlwd-mb-5">
-              <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-2 tlwd-font-medium">Assistant:</div>
-              <span class="tlwd-text-base tlwd-text-neutral-300 tlwd-italic">Waiting for response...</span>
+          {#if isStreaming}
+            <div class="tlwd-mb-3">
+              <div class="tlwd-text-sm tlwd-text-neutral-300 tlwd-mb-1 tlwd-font-medium">Assistant:</div>
+              
+              <!-- Thinking Indicator (shown when thinking is active or when streaming starts) -->
+              {#if isThinking || thinkingText || (!responseText && isStreaming)}
+                <div class="tlwd-mb-3">
+                  <!-- Clickable Thinking Indicator -->
+                  <button
+                    type="button"
+                    class="tlwd-w-full tlwd-flex tlwd-items-center tlwd-gap-2 tlwd-px-4 tlwd-py-3 tlwd-bg-gray-800/50 tlwd-border tlwd-border-gray-700 tlwd-rounded-lg tlwd-text-left tlwd-cursor-pointer tlwd-transition-colors hover:tlwd-bg-gray-800/70 tlwd-outline-none"
+                    on:click={() => thinkingExpanded = !thinkingExpanded}
+                  >
+                    <div class="tlwd-flex tlwd-items-center tlwd-gap-2 tlwd-flex-1">
+                      <div class="tlwd-flex tlwd-items-center tlwd-gap-1">
+                        <div class="thinking-dots">
+                          <span class="thinking-dot"></span>
+                          <span class="thinking-dot"></span>
+                          <span class="thinking-dot"></span>
+                        </div>
+                        <span class="tlwd-text-base tlwd-text-neutral-300 tlwd-font-medium">Thinking...</span>
+                      </div>
+                      {#if thinkingText}
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke-width={2}
+                          stroke="currentColor"
+                          class="tlwd-size-4 tlwd-text-neutral-400 tlwd-transition-transform"
+                          class:tlwd-rotate-180={thinkingExpanded}
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M19.5 8.25l-7.5 7.5-7.5-7.5"
+                          />
+                        </svg>
+                      {/if}
+                    </div>
+                  </button>
+                  
+                  <!-- Expandable Thinking Text -->
+                  {#if thinkingExpanded && thinkingText}
+                    <div class="tlwd-mt-2 tlwd-px-4 tlwd-py-3 tlwd-bg-gray-900/50 tlwd-border tlwd-border-gray-700/50 tlwd-rounded-lg tlwd-text-base tlwd-text-neutral-300 tlwd-leading-relaxed tlwd-max-h-96 tlwd-overflow-y-auto">
+                      {@html renderMarkdown(thinkingText)}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              
+              <!-- Actual Response (shown after thinking or if no thinking) -->
+              {#if responseText}
+                <div class="tlwd-text-base tlwd-text-neutral-100 tlwd-leading-relaxed markdown-content">
+                  {@html renderMarkdown(responseText)}
+                  <span class="tlwd-inline-block tlwd-w-2 tlwd-h-4 tlwd-bg-neutral-300 tlwd-ml-1 tlwd-animate-pulse">|</span>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -1956,7 +2134,7 @@
         {/if}
 
         <!-- Follow-up Input -->
-        <div class="tlwd-border-t tlwd-border-gray-700 tlwd-pt-3">
+        <div class="tlwd-border-t tlwd-border-gray-700 tlwd-pt-2">
           <form
             on:submit|preventDefault={sendFollowUp}
             class="tlwd-flex tlwd-items-center tlwd-gap-2"
@@ -1968,20 +2146,20 @@
               placeholder="Ask a follow-up question..."
               bind:value={followUpInput}
               disabled={isStreaming}
-              class="tlwd-flex-1 tlwd-px-4 tlwd-py-3 tlwd-text-base tlwd-bg-gray-800/50 tlwd-border tlwd-border-gray-700 tlwd-rounded-lg tlwd-text-neutral-100 placeholder:tlwd-text-neutral-500 tlwd-outline-none focus:tlwd-border-gray-600 disabled:tlwd-opacity-50 disabled:tlwd-cursor-not-allowed"
+              class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-text-base tlwd-bg-gray-800/50 tlwd-border tlwd-border-gray-700 tlwd-rounded-lg tlwd-text-neutral-100 placeholder:tlwd-text-neutral-500 tlwd-outline-none focus:tlwd-border-gray-600 disabled:tlwd-opacity-50 disabled:tlwd-cursor-not-allowed"
               autocomplete="off"
             />
             <button
               type="submit"
               disabled={!followUpInput.trim() || isStreaming}
-              class="tlwd-px-5 tlwd-py-3 tlwd-text-base tlwd-font-medium tlwd-bg-blue-600 hover:tlwd-bg-blue-700 disabled:tlwd-opacity-50 disabled:tlwd-cursor-not-allowed tlwd-text-white tlwd-rounded-lg tlwd-transition-colors tlwd-outline-none tlwd-border-none"
+              class="tlwd-px-4 tlwd-py-2 tlwd-text-base tlwd-font-medium tlwd-bg-blue-600 hover:tlwd-bg-blue-700 disabled:tlwd-opacity-50 disabled:tlwd-cursor-not-allowed tlwd-text-white tlwd-rounded-lg tlwd-transition-colors tlwd-outline-none tlwd-border-none"
             >
               Send
             </button>
           </form>
           
           <!-- Footer -->
-          <div class="tlwd-mt-3 tlwd-flex tlwd-items-center tlwd-justify-between">
+          <div class="tlwd-mt-2 tlwd-flex tlwd-items-center tlwd-justify-between">
             <div class="tlwd-text-sm tlwd-text-neutral-300">
               Press Escape to close
             </div>

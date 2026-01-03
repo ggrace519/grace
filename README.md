@@ -303,6 +303,16 @@ This fork includes comprehensive security enhancements. For detailed security in
 - ✅ Content Security Policy (CSP)
 - ✅ Message action validation
 
+## Changelog
+
+### 2026-01-02
+- Enhanced UI responsiveness and user experience with improved modal styles and thinking animation
+- Implemented state management improvements for response handling in SpotlightSearch component
+- Added thinking text indicator and follow-up input features for better conversation flow
+- Refactored CSS for improved layout and accessibility
+- Updated .gitignore to include the '_old' directory for better file management
+- Fixed CSS linting warnings for Tailwind CSS directives (`@tailwind` at-rules)
+
 ## License
 
 Copyright (c) 2023-2025 Timothy Jaeryang Baek (Open WebUI)

@@ -313,6 +313,23 @@ This fork includes comprehensive security enhancements. For detailed security in
 - Updated .gitignore to include the '_old' directory for better file management
 - Fixed CSS linting warnings for Tailwind CSS directives (`@tailwind` at-rules)
 
+### 2025-11-23
+- Enhanced Chrome API availability checks across the extension to improve error handling and user experience
+- Updated styles for better readability in markdown content
+- Adjusted color schemes for UI elements
+- Refactored code to ensure secure interactions with Chrome storage and APIs
+
+### 2025-11-18
+- Added comprehensive security enhancements: API key encryption (AES-256-GCM), rate limiting, CSP validation, and security fixes
+- Added 'Explain This' feature to context menu for AI-powered text explanations
+- Enhanced 'Summarize Page' functionality with improved content extraction
+- Added 'Continue in OpenWebUI' button to transfer conversation to OpenWebUI
+- Fixed context menu registration: created as separate top-level items instead of parent-child structure
+- Improved context menu registration error handling with proper async handling
+- Added comprehensive comments documenting all enhancements throughout codebase
+- Updated README to credit Open WebUI and highlight enhancements
+- Added Tim J. Baek to Acknowledgments section
+
 ## License
 
 Copyright (c) 2023-2025 Timothy Jaeryang Baek (Open WebUI)

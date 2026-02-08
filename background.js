@@ -1,3 +1,4 @@
+/* global chrome */
 // ============================================================================
 // ENHANCEMENT: API Key Encryption
 // ============================================================================
@@ -16,10 +17,17 @@
 async function getEncryptionKey() {
   try {
     // Get extension ID
-    const extensionId = chrome.runtime.id;
-    
+    const extensionId = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id)
+      ? chrome.runtime.id
+      : '';
+
     // Derive a key from extension ID using PBKDF2
-    const encoder = new TextEncoder();
+    const encoder = typeof TextEncoder !== 'undefined'
+      ? new TextEncoder()
+      : require('util').TextEncoder ? new (require('util').TextEncoder)() : null;
+    if (!encoder) {
+      throw new Error('TextEncoder is not available in this environment');
+    }
     const password = encoder.encode(extensionId + 'open-webui-extension-salt');
     const salt = encoder.encode('open-webui-api-key-encryption-salt-v1');
     

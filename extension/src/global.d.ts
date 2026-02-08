@@ -12,4 +12,5 @@ declare global {
   }
 }
 
-export {};
+// Reference augmented globals so they are not reported as unused
+export type { Window, HTMLElement };

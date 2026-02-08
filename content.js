@@ -1,4 +1,3 @@
-/* global chrome, document, window, console, setInterval, clearInterval, setTimeout */
 // ============================================================================
 // ENHANCEMENT: DOM Ready Initialization
 // ============================================================================

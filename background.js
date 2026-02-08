@@ -152,11 +152,9 @@ function isValidUrl(urlString) {
 
   try {
     const url = new URL(urlString);
-    // Only allow http and https protocols
     if (!['http:', 'https:'].includes(url.protocol)) {
       return false;
     }
-    // Prevent javascript: and data: URLs
     if (url.protocol === 'javascript:' || url.protocol === 'data:') {
       return false;
     }
@@ -166,12 +164,26 @@ function isValidUrl(urlString) {
   }
 }
 
-// Fetches only after URL validation to prevent SSRF. Call only with validated apiUrl.
+// Returns a safe URL string for fetch (reconstructed from parsed URL) or null. Prevents SSRF;
+// the value passed to fetch is never raw user input.
+function getValidatedFetchUrl(urlString) {
+  if (!urlString || typeof urlString !== 'string') return null;
+  try {
+    const url = new URL(urlString);
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    return url.origin + url.pathname + url.search;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Fetches only after URL validation. Uses reconstructed URL so no user-controlled string reaches fetch.
 function safeFetch(apiUrl, options) {
-  if (!isValidUrl(apiUrl)) {
+  const safeUrl = getValidatedFetchUrl(apiUrl);
+  if (safeUrl === null) {
     return Promise.reject(new Error('Invalid API URL'));
   }
-  return fetch(apiUrl, options);
+  return fetch(safeUrl, options);
 }
 
 // ============================================================================
@@ -190,59 +202,68 @@ const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSear
 // Limits are enforced per action type (chatCompletion, fetchModels, general).
 // Uses chrome.storage.local to persist request history across extension reloads.
 // ============================================================================
-// Rate Limiting Configuration
-const RATE_LIMITS = {
-  chatCompletion: { max: 10, window: 60000 }, // 10 requests per minute
-  fetchModels: { max: 5, window: 60000 },     // 5 requests per minute
-  general: { max: 20, window: 60000 }         // 20 requests per minute
-};
+// Rate Limiting Configuration (fixed keys only; no dynamic access)
+const RATE_LIMIT_CHAT = { max: 10, window: 60000 };
+const RATE_LIMIT_FETCH_MODELS = { max: 5, window: 60000 };
+const RATE_LIMIT_GENERAL = { max: 20, window: 60000 };
 
-// Whitelist of keys allowed for rate limit storage (prevents prototype pollution / injection)
-const RATE_LIMIT_ACTION_KEYS = Object.keys(RATE_LIMITS);
+function getRateLimitConfig(actionType) {
+  if (actionType === 'chatCompletion') return RATE_LIMIT_CHAT;
+  if (actionType === 'fetchModels') return RATE_LIMIT_FETCH_MODELS;
+  return RATE_LIMIT_GENERAL;
+}
+
+function getStoredRequestsForAction(raw, actionType) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  if (actionType === 'chatCompletion' && Array.isArray(raw.chatCompletion)) return raw.chatCompletion;
+  if (actionType === 'fetchModels' && Array.isArray(raw.fetchModels)) return raw.fetchModels;
+  if (actionType === 'general' && Array.isArray(raw.general)) return raw.general;
+  return [];
+}
+
+function buildRateLimitStorage(raw, actionType, updatedRequests) {
+  const out = {};
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    if (Array.isArray(raw.chatCompletion)) out.chatCompletion = raw.chatCompletion;
+    if (Array.isArray(raw.fetchModels)) out.fetchModels = raw.fetchModels;
+    if (Array.isArray(raw.general)) out.general = raw.general;
+  }
+  if (actionType === 'chatCompletion') out.chatCompletion = updatedRequests;
+  else if (actionType === 'fetchModels') out.fetchModels = updatedRequests;
+  else out.general = updatedRequests;
+  return out;
+}
 
 function getRateLimitKey(actionType) {
   if (typeof actionType !== 'string') return 'general';
-  return RATE_LIMIT_ACTION_KEYS.includes(actionType) ? actionType : 'general';
+  if (actionType === 'chatCompletion' || actionType === 'fetchModels') return actionType;
+  return 'general';
 }
 
-// Rate Limiting: Check if request should be allowed
+// Rate Limiting: Check if request should be allowed (no dynamic object key access)
 async function checkRateLimit(actionType) {
   const key = getRateLimitKey(actionType);
+  const limit = getRateLimitConfig(key);
   const now = Date.now();
-  const limit = RATE_LIMITS[key];
 
   try {
     const stored = await chrome.storage.local.get(['rateLimit']);
     const raw = stored.rateLimit;
-    // Copy only whitelisted keys to avoid prototype pollution from stored data
-    const rateLimitData = {};
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      for (const k of RATE_LIMIT_ACTION_KEYS) {
-        if (Object.prototype.hasOwnProperty.call(raw, k) && Array.isArray(raw[k])) {
-          rateLimitData[k] = raw[k];
-        }
-      }
-    }
+    let requests = getStoredRequestsForAction(raw, key);
 
-    let requests = rateLimitData[key] || [];
-
-    // Remove requests outside the time window
     requests = requests.filter(timestamp => now - timestamp < limit.window);
 
-    // Check if limit exceeded
     if (requests.length >= limit.max) {
       const oldestRequest = requests[0];
       const waitTime = limit.window - (now - oldestRequest);
       return {
         allowed: false,
-        waitTime: Math.ceil(waitTime / 1000) // Return seconds
+        waitTime: Math.ceil(waitTime / 1000)
       };
     }
 
-    // Add current request timestamp
     requests = requests.concat(now);
-    rateLimitData[key] = requests;
-
+    const rateLimitData = buildRateLimitStorage(raw, key, requests);
     await chrome.storage.local.set({ rateLimit: rateLimitData });
 
     return { allowed: true };

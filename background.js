@@ -1,3 +1,4 @@
+/* global chrome */
 // ============================================================================
 // ENHANCEMENT: API Key Encryption
 // ============================================================================
@@ -149,7 +150,7 @@ function isValidUrl(urlString) {
   if (!urlString || typeof urlString !== 'string') {
     return false;
   }
-  
+
   try {
     const url = new URL(urlString);
     // Only allow http and https protocols
@@ -164,6 +165,14 @@ function isValidUrl(urlString) {
   } catch (e) {
     return false;
   }
+}
+
+// Fetches only after URL validation to prevent SSRF. Call only with validated apiUrl.
+function safeFetch(apiUrl, options) {
+  if (!isValidUrl(apiUrl)) {
+    return Promise.reject(new Error('Invalid API URL'));
+  }
+  return fetch(apiUrl, options);
 }
 
 // ============================================================================
@@ -189,21 +198,38 @@ const RATE_LIMITS = {
   general: { max: 20, window: 60000 }         // 20 requests per minute
 };
 
+// Whitelist of keys allowed for rate limit storage (prevents prototype pollution / injection)
+const RATE_LIMIT_ACTION_KEYS = Object.keys(RATE_LIMITS);
+
+function getRateLimitKey(actionType) {
+  if (typeof actionType !== 'string') return 'general';
+  return RATE_LIMIT_ACTION_KEYS.includes(actionType) ? actionType : 'general';
+}
+
 // Rate Limiting: Check if request should be allowed
 async function checkRateLimit(actionType) {
+  const key = getRateLimitKey(actionType);
   const now = Date.now();
-  const limit = RATE_LIMITS[actionType] || RATE_LIMITS.general;
-  
+  const limit = RATE_LIMITS[key];
+
   try {
     const stored = await chrome.storage.local.get(['rateLimit']);
-    const rateLimitData = stored.rateLimit || {};
-    
-    // Get or initialize request history for this action type
-    let requests = rateLimitData[actionType] || [];
-    
+    const raw = stored.rateLimit;
+    // Copy only whitelisted keys to avoid prototype pollution from stored data
+    const rateLimitData = {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const k of RATE_LIMIT_ACTION_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(raw, k) && Array.isArray(raw[k])) {
+          rateLimitData[k] = raw[k];
+        }
+      }
+    }
+
+    let requests = rateLimitData[key] || [];
+
     // Remove requests outside the time window
     requests = requests.filter(timestamp => now - timestamp < limit.window);
-    
+
     // Check if limit exceeded
     if (requests.length >= limit.max) {
       const oldestRequest = requests[0];
@@ -213,18 +239,16 @@ async function checkRateLimit(actionType) {
         waitTime: Math.ceil(waitTime / 1000) // Return seconds
       };
     }
-    
+
     // Add current request timestamp
-    requests.push(now);
-    rateLimitData[actionType] = requests;
-    
-    // Save updated rate limit data
+    requests = requests.concat(now);
+    rateLimitData[key] = requests;
+
     await chrome.storage.local.set({ rateLimit: rateLimitData });
-    
+
     return { allowed: true };
   } catch (error) {
     console.error("Extension: Rate limit check failed:", error);
-    // On error, allow the request but log it
     return { allowed: true };
   }
 }
@@ -243,6 +267,56 @@ function validateCSPHeaders(response) {
     console.log("Extension: CSP header detected:", cspHeader);
   }
   return true; // Don't block based on CSP headers, just validate
+}
+
+// Injected into the page via chrome.scripting.executeScript for "writeText" action.
+// Must be at function body root for consistent behavior; runs in page context.
+function writeTextToInput(text, targetId) {
+  if (typeof text !== 'string') {
+    console.error("Extension: Invalid text type");
+    return;
+  }
+  if (targetId && typeof targetId !== 'string') {
+    console.error("Extension: Invalid targetId type");
+    return;
+  }
+
+  let targetElement = null;
+
+  if (targetId) {
+    targetElement = document.getElementById(targetId);
+  }
+
+  if (!targetElement) {
+    const activeElement = document.activeElement;
+    if (
+      activeElement &&
+      (activeElement.tagName === "INPUT" || activeElement.tagName === "TEXTAREA")
+    ) {
+      targetElement = activeElement;
+    }
+  }
+
+  if (!targetElement) {
+    const inputs = document.querySelectorAll("input, textarea");
+    for (const input of inputs) {
+      if (input.offsetParent !== null) {
+        targetElement = input;
+        break;
+      }
+    }
+  }
+
+  if (targetElement) {
+    targetElement.value = `${targetElement.value}${text}`;
+    const event = new Event("input", { bubbles: true });
+    targetElement.dispatchEvent(event);
+    if (targetElement.tagName === "TEXTAREA") {
+      targetElement.scrollTop = targetElement.scrollHeight;
+    }
+  } else {
+    console.warn("No active input or textarea field found.");
+  }
 }
 
 // ============================================================================
@@ -498,61 +572,6 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       });
     return true; // Keep channel open for async response
   } else if (request.action == "writeText") {
-    function writeTextToInput(text, targetId) {
-      // Security: Validate inputs
-      if (typeof text !== 'string') {
-        console.error("Extension: Invalid text type");
-        return;
-      }
-      if (targetId && typeof targetId !== 'string') {
-        console.error("Extension: Invalid targetId type");
-        return;
-      }
-      
-      let targetElement = null;
-      
-      // If targetId is provided, use it
-      if (targetId) {
-        targetElement = document.getElementById(targetId);
-      }
-      
-      // Fallback to active element
-      if (!targetElement) {
-        const activeElement = document.activeElement;
-        if (
-          activeElement &&
-          (activeElement.tagName === "INPUT" ||
-            activeElement.tagName === "TEXTAREA")
-        ) {
-          targetElement = activeElement;
-        }
-      }
-      
-      // Last resort: find first visible input/textarea
-      if (!targetElement) {
-        const inputs = document.querySelectorAll("input, textarea");
-        for (const input of inputs) {
-          if (input.offsetParent !== null) { // Check if visible
-            targetElement = input;
-            break;
-          }
-        }
-      }
-      
-      if (targetElement) {
-        targetElement.value = `${targetElement.value}${text}`;
-        
-        // Trigger input event so React/Vue/etc. frameworks detect the change
-        const event = new Event("input", { bubbles: true });
-        targetElement.dispatchEvent(event);
-
-        if (targetElement.tagName === "TEXTAREA") {
-          targetElement.scrollTop = targetElement.scrollHeight;
-        }
-      } else {
-        console.warn("No active input or textarea field found.");
-      }
-    }
     chrome.scripting.executeScript({
       target: { tabId: id, allFrames: true },
       func: writeTextToInput,
@@ -602,7 +621,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       }
       
       try {
-        const res = await fetch(apiUrl, {
+        const res = await safeFetch(apiUrl, {
           method: "GET",
           headers: {
             Accept: "application/json",
@@ -610,10 +629,9 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
             ...(decryptedKey && { authorization: `Bearer ${decryptedKey}` }),
           },
         });
-        
-        // CSP Validation: Check response headers
+
         validateCSPHeaders(res);
-        
+
         if (!res.ok) {
           const error = await res.json();
           sendResponse({ error: error });
@@ -699,7 +717,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       }
       
       try {
-        const res = await fetch(apiUrl, {
+        const res = await safeFetch(apiUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -707,16 +725,15 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
           },
           body: JSON.stringify(request.body),
         });
-        
-        // CSP Validation: Check response headers
+
         validateCSPHeaders(res);
-        
+
         if (!res.ok) {
           const errorText = await res.text();
           sendResponse({ error: `HTTP ${res.status}: ${errorText}` });
           return;
         }
-        
+
         const data = await res.json();
         sendResponse({ data: data });
       } catch (error) {
@@ -790,8 +807,8 @@ chrome.runtime.onConnect.addListener((port) => {
           port.disconnect();
           return;
         }
-        
-        fetch(apiUrl, {
+
+        safeFetch(apiUrl, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${decryptedApiKey}`,

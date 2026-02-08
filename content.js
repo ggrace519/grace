@@ -1,3 +1,4 @@
+/* global chrome, document, window, console, setInterval, clearInterval, setTimeout */
 // ============================================================================
 // ENHANCEMENT: DOM Ready Initialization
 // ============================================================================
@@ -10,13 +11,34 @@
 let initialized = false;
 let checkBodyInterval = null;
 
+// Injects a CSS file into the page. Placed at function body root for consistent behavior.
+function injectCSS(file) {
+  try {
+    const existingLink = document.querySelector(`link[href="${file}"]`);
+    if (!existingLink) {
+      const link = document.createElement("link");
+      link.href = file;
+      link.type = "text/css";
+      link.rel = "stylesheet";
+      const head = document.head || document.getElementsByTagName("head")[0];
+      if (head) {
+        head.appendChild(link);
+      } else {
+        console.warn("Extension: Could not find head element");
+      }
+    }
+  } catch (error) {
+    console.error("Extension: Error injecting CSS:", error);
+  }
+}
+
 // Wait for DOM to be ready before initializing
 function initExtension() {
   // Only initialize in main frame to avoid duplicate processing when all_frames: true
   if (window !== window.top) {
     return;
   }
-  
+
   // Prevent multiple calls
   if (initialized) {
     return;
@@ -36,30 +58,8 @@ function initExtension() {
       document.body.appendChild(appDiv);
     }
 
-    // Function to inject a CSS file
-    function injectCSS(file) {
-      try {
-        const existingLink = document.querySelector(`link[href="${file}"]`);
-        if (!existingLink) {
-          const link = document.createElement("link");
-          link.href = file;
-          link.type = "text/css";
-          link.rel = "stylesheet";
-          const head = document.head || document.getElementsByTagName("head")[0];
-          if (head) {
-            head.appendChild(link);
-          } else {
-            console.warn("Extension: Could not find head element");
-          }
-        }
-      } catch (error) {
-        console.error("Extension: Error injecting CSS:", error);
-      }
-    }
-
-    // Inject the CSS file
     injectCSS(chrome.runtime.getURL("extension/dist/style.css"));
-    
+
     initialized = true;
   } catch (error) {
     console.error("Extension: Error initializing:", error);

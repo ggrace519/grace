@@ -334,6 +334,9 @@
           model: currentModel,
           messages: conversationHistory,
           stream: true,
+          features: {
+            web_search: true
+          }
         },
         endpoint
       );
@@ -552,7 +555,7 @@
     conversationHistory = [
       {
         role: "system",
-        content: `I need help understanding a concept or term mentioned in this text: ${selectedText}\n\nPlease explain this term/concept in simple, clear language. Provide a definition and offer examples to illustrate your point.\n\nIf there are any related ideas or concepts that I should know about, please summarize those as well.\n\nAdditionally, if you can provide any context or background information that might be helpful for understanding the term/concept, please do so.\n\nOnly use the selected text: The generated response should only use the text that was selected by the user and not include any external information unless it is directly relevant to the concept being explained.\n\nYou can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your explanation more readable and well-structured.`
+        content: `I need help understanding a concept or term mentioned in this text: ${selectedText}\n\nPlease explain this term/concept in simple, clear language. Provide a definition and offer examples to illustrate your point.\n\nIf there are any related ideas or concepts that I should know about, please summarize those as well.\n\nAdditionally, if you can provide any context or background information that might be helpful for understanding the term/concept, please do so. You have access to web search - use it to find current information, recent developments, or additional context that would help explain the concept better.\n\nYou can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your explanation more readable and well-structured.`
       },
       {
         role: "user",
@@ -579,6 +582,9 @@
           model: currentModel,
           messages: conversationHistory,
           stream: true,
+          features: {
+            web_search: true
+          }
         },
         endpoint
       );
@@ -921,6 +927,9 @@
           model: currentModel,
           messages: conversationHistory,
           stream: true,
+          features: {
+            web_search: true
+          }
         },
         endpoint
       );
@@ -1119,7 +1128,7 @@
     }
     
     // Store toggle function globally so injected scripts can call it
-    (window as any).openWebUIToggleSearch = toggleSearch;
+    window.openWebUIToggleSearch = toggleSearch;
     
     // Listen for custom event from background script (keyboard shortcut)
     const handleToggleEvent = () => {
@@ -1334,7 +1343,7 @@
             conversationHistory = [
               {
                 role: "system",
-                content: "You are a helpful assistant. You can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your responses more readable and well-structured.",
+                content: "You are a helpful assistant with access to web search. For questions about current events, recent news, or information that may have changed after your training data, use web search to provide accurate, up-to-date information. Cite sources when using web search results. You can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your responses more readable and well-structured.",
               },
               {
                 role: "user",
@@ -1376,6 +1385,9 @@
                 model: currentModel,
                 messages: conversationHistory,
                 stream: true,
+                features: {
+                  web_search: true
+                }
               },
               endpoint
             );
@@ -1640,7 +1652,7 @@
       window.removeEventListener("open-webui-toggle-search", handleToggleEvent);
       window.removeEventListener("open-webui-summarize-page", handleSummarizeEvent as EventListener);
       window.removeEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
-      delete (window as any).openWebUIToggleSearch;
+      delete window.openWebUIToggleSearch;
     };
   });
 </script>

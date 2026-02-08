@@ -9,34 +9,31 @@
 import "./app.css";
 import App from "./App.svelte";
 
-// Prevent multiple initializations using global flag
-const GLOBAL_INIT_KEY = '__openwebui_extension_initialized';
-
-function initApp() {
+function initApp(): InstanceType<typeof App> | null {
   // Only initialize in main frame to avoid duplicate processing when all_frames: true
   if (window !== window.top) {
     return null;
   }
-  
+
   // Check global flag to prevent multiple initializations across script reloads
-  if ((window as any)[GLOBAL_INIT_KEY]) {
+  if (window.__openwebui_extension_initialized) {
     return null;
   }
-  
+
   const targetElement = document.getElementById("extension-app");
   if (targetElement) {
     // Check if app is already mounted on this element
-    if ((targetElement as any).__svelte_app) {
-      return (targetElement as any).__svelte_app;
+    if (targetElement.__svelte_app) {
+      return targetElement.__svelte_app as InstanceType<typeof App>;
     }
-    
+
     const app = new App({
       target: targetElement,
     });
     // Store reference to prevent duplicate mounts
-    (targetElement as any).__svelte_app = app;
+    targetElement.__svelte_app = app;
     // Set global flag to prevent re-initialization
-    (window as any)[GLOBAL_INIT_KEY] = true;
+    window.__openwebui_extension_initialized = true;
     return app;
   } else {
     console.warn("Extension app target element not found, retrying...");

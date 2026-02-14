@@ -59,6 +59,12 @@ function initExtension() {
 
     injectCSS(chrome.runtime.getURL("extension/dist/style.css"));
 
+    // Inject main.js as an ES module to support imports
+    const script = document.createElement("script");
+    script.type = "module";
+    script.src = chrome.runtime.getURL("extension/dist/main.js");
+    (document.head || document.getElementsByTagName("head")[0]).appendChild(script);
+
     initialized = true;
   } catch (error) {
     console.error("Extension: Error initializing:", error);

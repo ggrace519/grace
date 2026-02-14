@@ -18,23 +18,33 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "http://*/*",
+        "https://*/*"
+      ],
+      "exclude_matches": [
+        "*://us01ccistatic.zoom.us/*"
       ],
       "js": [
-        "content.js",
-        "extension/dist/main.js"
+        "content.js"
       ],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     }
   ],
   "commands": {
     "open-search": {
       "suggested_key": {
-        "default": "Ctrl+Shift+Space",
-        "mac": "Command+Shift+Space"
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
       },
       "description": "Open Open WebUI search"
+    },
+    "open-sidebar": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Open Open WebUI sidebar"
     }
   },
   "host_permissions": [
@@ -53,6 +63,14 @@
   "permissions": [
     "storage",
     "scripting",
-    "contextMenus"
-  ]
+    "contextMenus",
+    "commands",
+    "sidePanel"
+  ],
+  "action": {
+    "default_title": "Open WebUI Extension"
+  },
+  "side_panel": {
+    "default_path": "extension/dist/sidebar.html"
+  }
 }

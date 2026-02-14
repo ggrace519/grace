@@ -55,9 +55,9 @@ For a complete list of security features and implementation details, see [SECURI
 
 ### Core Features (from Original Project)
 
-- **Spotlight Search**: Press `Cmd/Ctrl + Space + Shift` to open a quick search interface
+- **Spotlight Search**: Press `Cmd/Ctrl + Shift + K` to open a quick search interface
 - **Text Selection**: Automatically captures selected text when opening the search
-- **Direct AI Responses**: Use `Cmd/Ctrl + Enter + Shift` to get AI responses written directly into active input/textarea fields
+- **Direct AI Responses**: Use `Cmd/Ctrl + Shift + Enter` to get AI responses written directly into active input/textarea fields
 - **Open WebUI Integration**: Seamlessly connects to your Open WebUI instance
 - **Model Selection**: Choose from available models in your Open WebUI setup
 - **Streaming Responses**: Real-time streaming of AI responses
@@ -121,7 +121,7 @@ This will create the production build in `extension/dist/` directory with:
 
 ### First-Time Setup
 
-1. **Open the extension**: Press `Cmd/Ctrl + Space + Shift` on any webpage
+1. **Open the extension**: Press `Cmd/Ctrl + Shift + K` on any webpage
 2. **Enter your Open WebUI URL**: 
    - Example: `http://localhost:8080` or `https://your-open-webui-instance.com`
    - Do not include a trailing slash
@@ -147,14 +147,14 @@ To reset your configuration:
 
 ### Searching in Open WebUI
 
-1. Open the search interface (`Cmd/Ctrl + Space + Shift`)
+1. Open the search interface (`Cmd/Ctrl + Shift + K`)
 2. Type your query (or use selected text)
 3. Press `Enter` to open the search in a new Open WebUI tab
 
 ### Getting AI Responses Directly
 
 1. Select text on any webpage
-2. Press `Cmd/Ctrl + Enter + Shift`
+2. Press `Cmd/Ctrl + Shift + Enter`
 3. A popup will appear showing the streaming AI response
 4. **Ask Follow-up Questions**: Type a follow-up question in the input field at the bottom of the popup
 5. Press `Enter` or click "Send" to continue the conversation

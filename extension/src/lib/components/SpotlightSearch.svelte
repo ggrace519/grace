@@ -3,6 +3,21 @@
   import { generateOpenAIChatCompletion, getModels } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
 
+  // Helper for user-friendly error messages
+  function getUserFriendlyErrorMessage(error: any): string {
+    const errorMessage = error?.message || String(error);
+    if (errorMessage.includes("Rate limit") || errorMessage.includes("429")) {
+      return "Rate limit exceeded. Please wait a moment and try again.";
+    }
+    if (errorMessage.includes("Failed to fetch") || errorMessage.includes("NetworkError")) {
+      return "Could not connect to Open WebUI. Please check the URL.";
+    }
+    if (errorMessage.includes("401") || errorMessage.includes("Invalid API key")) {
+      return "Invalid API key. Please check your configuration.";
+    }
+    return errorMessage;
+  }
+
   // ========================================================================
   // ENHANCEMENT: Response Popup and Conversation Management
   // ========================================================================
@@ -11,6 +26,8 @@
   // This allows users to have multi-turn conversations without leaving
   // the current webpage.
   // ========================================================================
+  export let sidebarMode = false;
+
   let show = false;
   let showConfig = true;
   let showResponse = false; // ENHANCEMENT: Controls response popup visibility
@@ -75,9 +92,16 @@
     showConfig = true;
   };
 
-  const submitHandler = (e) => {
+  const submitHandler = async (e) => {
     e.preventDefault();
 
+    // In sidebar mode, use streaming API
+    if (sidebarMode) {
+      await handleSidebarSubmit();
+      return;
+    }
+
+    // Original behavior - open in new tab
     // Security: Validate URL and sanitize search value
     try {
       const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
@@ -85,11 +109,11 @@
         console.error("Extension: Invalid URL protocol");
         return;
       }
-      
+
       // Security: Sanitize search value (encodeURIComponent already handles this)
       const sanitizedQuery = encodeURIComponent(searchValue);
       const sanitizedModel = encodeURIComponent(model);
-      
+
       window.open(
         `${url}/?q=${sanitizedQuery}&models=${sanitizedModel}`,
         "_blank"
@@ -99,6 +123,107 @@
       show = false;
     } catch (error) {
       console.error("Extension: Invalid URL format");
+    }
+  };
+
+  // Handle sidebar chat submission with streaming
+  const handleSidebarSubmit = async () => {
+    if (!searchValue.trim() || isStreaming) return;
+    if (!url || !key || !model) {
+      showConfig = true;
+      return;
+    }
+
+    const userMessage = searchValue.trim();
+    searchValue = "";
+    isStreaming = true;
+    isThinking = false;
+    thinkingText = "";
+    responseText = "";
+    showError = false;
+    errorMessage = "";
+
+    // Add user message to history
+    conversationHistory = [...conversationHistory, { role: "user", content: userMessage }];
+
+    // Build messages with system prompt
+    const messages = [
+      {
+        role: "system",
+        content: "You are a helpful assistant. Provide clear and concise responses. Use markdown formatting when appropriate."
+      },
+      ...conversationHistory.filter(m => m.role !== "system")
+    ];
+
+    try {
+      const isOpenAI = models.length > 0
+        ? models.find((m) => m.id === model)?.owned_by === "openai" ?? false
+        : false;
+      const endpoint = isOpenAI ? `${url}/openai` : `${url}/ollama/v1`;
+
+      const [res] = await generateOpenAIChatCompletion(
+        key,
+        { model, messages, stream: true },
+        endpoint
+      );
+
+      if (!res.ok) {
+        errorMessage = `Error: ${res.status} ${res.statusText}`;
+        showError = true;
+        isStreaming = false;
+        return;
+      }
+
+      const reader = res.body
+        .pipeThrough(new TextDecoderStream())
+        .pipeThrough(splitStream("\n"))
+        .getReader();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        const lines = value.split("\n");
+        for (const line of lines) {
+          if (line && line.startsWith("data: ") && line !== "data: [DONE]") {
+            try {
+              const data = JSON.parse(line.slice(6));
+              const content = data.choices?.[0]?.delta?.content ?? "";
+
+              // Check for thinking/reasoning_content (OpenAI o1 models)
+              const reasoningContent = data.choices?.[0]?.delta?.reasoning_content;
+              if (reasoningContent) {
+                if (!isThinking) {
+                  isThinking = true;
+                }
+                thinkingText += reasoningContent;
+              }
+
+              if (content) {
+                isThinking = false;
+                responseText += content;
+              }
+            } catch (err) {
+              // Ignore parse errors for streaming
+            }
+          }
+        }
+      }
+
+      // Add assistant response to history
+      if (responseText || thinkingText) {
+        conversationHistory = [...conversationHistory, {
+          role: "assistant",
+          content: responseText || thinkingText
+        }];
+      }
+    } catch (error) {
+      console.error("Sidebar chat error:", error);
+      errorMessage = getUserFriendlyErrorMessage(error);
+      showError = true;
+    } finally {
+      isStreaming = false;
+      isThinking = false;
     }
   };
 
@@ -177,6 +302,15 @@
     }
 
     showConfig = false;
+
+    // Fetch models for the sidebar dropdown
+    if (sidebarMode && url && key) {
+      try {
+        models = await getModels(key, url);
+      } catch (modelError) {
+        console.log("Failed to load models:", modelError);
+      }
+    }
   };
 
   // Function to toggle search interface
@@ -1120,7 +1254,13 @@
     if (window !== window.top) {
       return;
     }
-    
+
+    // In sidebar mode, show the main search by default
+    if (sidebarMode) {
+      show = true;
+      showConfig = false;
+    }
+
     // Check if Chrome APIs are available
     if (!isChromeAPIAvailable()) {
       console.warn("Extension: Chrome APIs not available. Extension may have been reloaded or context invalidated.");
@@ -1659,7 +1799,198 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <!-- svelte-ignore a11y-no-static-element-interactions -->
-{#if show}
+{#if sidebarMode}
+  <!-- Sidebar Mode: Full viewport layout -->
+  <div
+    class="tlwd-fixed tlwd-inset-0 tlwd-z-[9999999999] tlwd-bg-gray-900 tlwd-flex tlwd-flex-col tlwd-h-full"
+  >
+    <!-- Sidebar Header -->
+    <div class="tlwd-flex tlwd-items-center tlwd-p-4 tlwd-border-b tlwd-border-gray-700">
+      <div class="tlwd-flex tlwd-items-center tlwd-gap-2">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke-width={2}
+          stroke="currentColor"
+          class="tlwd-size-6 tlwd-text-blue-500"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+        </svg>
+        <span class="tlwd-text-xl tlwd-font-semibold tlwd-text-white">Open WebUI</span>
+      </div>
+    </div>
+
+    <!-- Sidebar Content -->
+    <div class="tlwd-flex-1 tlwd-overflow-y-auto tlwd-p-4">
+      {#if showConfig}
+        <!-- Config Form -->
+        <form on:submit={initHandler} class="tlwd-space-y-4">
+          <div>
+            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Open WebUI URL</label>
+            <input
+              type="url"
+              bind:value={url}
+              placeholder="http://localhost:8080"
+              class="tlwd-w-full tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
+              required
+            />
+          </div>
+          <div>
+            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">API Key</label>
+            <input
+              type="password"
+              bind:value={key}
+              placeholder="Enter your API key"
+              class="tlwd-w-full tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
+              required
+            />
+          </div>
+          <div>
+            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Model</label>
+            <div class="tlwd-flex tlwd-gap-2">
+              <select
+                bind:value={model}
+                class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
+                required
+              >
+                <option value="">Select a model</option>
+                {#each models as m}
+                  <option value={m.id}>{m.name ?? m.id}</option>
+                {/each}
+              </select>
+              <button
+                type="button"
+                on:click={async () => {
+                  if (!url) {
+                    alert("Please enter a URL first");
+                    return;
+                  }
+                  if (!key) {
+                    alert("Please enter an API key first");
+                    return;
+                  }
+                  try {
+                    console.log("Loading models from:", url, "with key:", key ? "provided" : "missing");
+                    models = await getModels(key, url);
+                    console.log("Models loaded:", models.length);
+                  } catch (e) {
+                    console.log("Failed to load models:", e);
+                    alert("Failed to load models: " + e.message);
+                  }
+                }}
+                class="tlwd-px-3 tlwd-py-2 tlwd-bg-gray-700 hover:tlwd-bg-gray-600 tlwd-text-white tlwd-rounded-lg tlwd-text-sm"
+                title="Load available models"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width={2} stroke="currentColor" class="tlwd-w-5 tlwd-h-5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <button
+            type="submit"
+            class="tlwd-w-full tlwd-py-2 tlwd-bg-blue-600 hover:tlwd-bg-blue-700 tlwd-text-white tlwd-rounded-lg tlwd-font-medium"
+          >
+            Save & Start Chatting
+          </button>
+        </form>
+      {:else}
+        <!-- Chat Interface - Uses conversationHistory -->
+        <div class="tlwd-space-y-4" bind:this={responseContainer}>
+          {#each conversationHistory as msg}
+            {#if msg.role !== 'system'}
+              <div class="tlwd-flex" class:tlwd-justify-end={msg.role === 'user'}>
+                <div
+                  class="tlwd-max-w-[85%] tlwd-px-4 tlwd-py-3 tlwd-rounded-2xl tlwd-text-sm"
+                  class:tlwd-bg-blue-600={msg.role === 'user'}
+                  class:tlwd-text-white={msg.role === 'user'}
+                  class:tlwd-bg-gray-800={msg.role !== 'user'}
+                  class:tlwd-text-gray-200={msg.role !== 'user'}
+                >
+                  {#if msg.role === 'user'}
+                    {msg.content}
+                  {:else}
+                    {@html renderMarkdown(msg.content)}
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/each}
+
+          <!-- Streaming Response -->
+          {#if isThinking && thinkingText}
+            <div class="tlwd-flex tlwd-justify-start">
+              <div class="tlwd-max-w-[85%] tlwd-px-4 tlwd-py-3 tlwd-bg-gray-800 tlwd-rounded-2xl tlwd-text-gray-200 tlwd-text-sm">
+                <div class="tlwd-text-xs tlwd-text-gray-500 tlwd-mb-1">Thinking...</div>
+                {@html renderMarkdown(thinkingText)}
+              </div>
+            </div>
+          {/if}
+
+          {#if isStreaming && !isThinking && responseText}
+            <div class="tlwd-flex tlwd-justify-start">
+              <div class="tlwd-max-w-[85%] tlwd-px-4 tlwd-py-3 tlwd-bg-gray-800 tlwd-rounded-2xl tlwd-text-gray-200 tlwd-text-sm">
+                {@html renderMarkdown(responseText)}
+                <span class="tlwd-inline-block tlwd-w-1.5 tlwd-h-4 tlwd-bg-gray-400 tlwd-ml-1 tlwd-animate-pulse"></span>
+              </div>
+            </div>
+          {/if}
+
+          {#if showError && errorMessage}
+            <div class="tlwd-p-3 tlwd-bg-red-900/30 tlwd-border tlwd-border-red-700/50 tlwd-rounded-lg tlwd-text-red-300 tlwd-text-sm">
+              {errorMessage}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Sidebar Input -->
+    {#if !showConfig}
+      <div class="tlwd-p-4 tlwd-border-t tlwd-border-gray-700">
+        <form on:submit|preventDefault={submitHandler} class="tlwd-flex tlwd-gap-2">
+          <input
+            type="text"
+            bind:value={searchValue}
+            placeholder="Ask something..."
+            disabled={isStreaming}
+            class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500 disabled:tlwd-opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={!searchValue.trim() || isStreaming}
+            class="tlwd-px-4 tlwd-py-2 tlwd-bg-blue-600 hover:tlwd-bg-blue-700 tlwd-text-white tlwd-rounded-lg disabled:tlwd-opacity-50 disabled:tlwd-cursor-not-allowed"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width={2} stroke="currentColor" class="tlwd-w-5 tlwd-h-5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0 1 21.485 12 59.77 59.77 0 0 1 3.27 20.876L5.999 12zm0 0h7.5" />
+            </svg>
+          </button>
+        </form>
+
+        <!-- Action Buttons -->
+        <div class="tlwd-flex tlwd-items-center tlwd-justify-between tlwd-mt-3">
+          <button
+            class="tlwd-text-xs tlwd-text-gray-400 hover:tlwd-text-gray-300"
+            on:click={() => showConfig = true}
+            type="button"
+          >
+            Configure
+          </button>
+          {#if conversationHistory.length > 0}
+            <button
+              class="tlwd-text-xs tlwd-text-blue-400 hover:tlwd-text-blue-300"
+              on:click={continueInOpenWebUI}
+              type="button"
+            >
+              Open in OpenWebUI
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+{:else if show}
   <div
     class="tlwd-fixed tlwd-top-0 tlwd-right-0 tlwd-left-0 tlwd-bottom-0 tlwd-w-full tlwd-min-h-screen tlwd-h-screen tlwd-flex tlwd-justify-center tlwd-z-[9999999999] tlwd-overflow-hidden tlwd-overscroll-contain"
     on:mousedown={() => {

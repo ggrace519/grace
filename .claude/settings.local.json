@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Bash(npm run build)",
+      "Bash(ls -la //wsl.localhost/Ubuntu-24.04/home/ggrace/coding-projects/extension/)",
+      "Bash(cd //wsl.localhost/Ubuntu-24.04/home/ggrace/coding-projects/extension/extension)",
+      "Bash(wsl pwd)",
+      "Bash(wsl -e bash -lc \"cd /home/ggrace/coding-projects/extension/extension && npm run build 2>&1\")",
+      "Bash(wsl -e bash -lc 'ls //wsl.localhost/Ubuntu-24.04/home/ggrace/coding-projects/extension/extension/')",
+      "Bash(wsl -e bash -lc 'ls /home/ggrace/coding-projects/extension/extension/')",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && ls -la index.html && cat index.html')",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && ls -la dist/')",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && /home/ggrace/coding-projects/extension/extension/node_modules/vite/bin/vite.js build 2>&1')",
+      "Bash(wsl -e bash -lc 'which node && node --version')",
+      "Bash(wsl -e bash -lc 'ls /usr/bin/node* 2>/dev/null || ls /usr/local/bin/node* 2>/dev/null || echo \"\"node not in standard paths\"\"')",
+      "Bash(wsl -e bash -lc 'ls ~/.nvm/versions/node/ 2>/dev/null || ls /opt/node*/bin/node 2>/dev/null || which nodejs 2>/dev/null || echo \"\"checking PATH: $PATH\"\"')",
+      "Bash(wsl -e bash -lc '/home/ggrace/.nvm/versions/node/v24.11.0/bin/node --version')",
+      "Bash(wsl -e bash -lc 'export PATH=$HOME/.nvm/versions/node/v24.11.0/bin:$PATH && node --version && cd /home/ggrace/coding-projects/extension/extension && npm run build 2>&1')",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && rm -rf node_modules package-lock.json && npm install 2>&1')",
+      "Bash(wsl -e bash -lc \"cd /home/ggrace/coding-projects/extension/extension && npm cache clean --force && rm -rf node_modules package-lock.json 2>/dev/null; echo ''done cleaning''\")",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && npm install 2>&1')",
+      "Bash(wsl -e bash -lc \"cd /home/ggrace/coding-projects/extension/extension && rm -rf node_modules 2>/dev/null; rm -f package-lock.json 2>/dev/null; ls -la node_modules 2>/dev/null || echo ''node_modules removed''\")",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && npm_config_platform=linux npm_config_arch=x64 npm install --platform=linux --arch=x64 2>&1')",
+      "Bash(wsl -e bash -lc 'ln -sf /home/ggrace/coding-projects/extension/extension /tmp/extension && cd /tmp/extension && rm -rf node_modules package-lock.json 2>/dev/null; echo \"\"cleaned\"\"')",
+      "Bash(wsl -e bash -lc 'cd /tmp/extension && npm install 2>&1')",
+      "Bash(wsl -e bash -lc 'which node && file $\\(which node\\)')",
+      "Bash(wsl -e bash -lc 'cat /home/ggrace/coding-projects/extension/extension/.npmrc 2>/dev/null || echo \"\"no .npmrc\"\"')",
+      "Bash(wsl -e bash -lc 'env | grep -i node')",
+      "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && PATH=$\\(echo $PATH | tr : \"\"\\\\n\"\" | grep -v \"\"/mnt/c\"\" | tr \"\"\\\\n\"\" : | sed \"\"s/:$//\"\"\\) && npm install 2>&1')",
+      "Write",
+      "Commands"
+    ]
+  }
+}

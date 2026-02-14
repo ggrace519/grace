@@ -5,7 +5,7 @@ This document provides essential information for AI assistants working on the Op
 ## 📋 Project Overview
 
 This is a Chrome Extension (Manifest V3) that integrates with Open WebUI to provide:
-- Spotlight-style search interface (`Ctrl+Shift+Space`)
+- Spotlight-style search interface (`Ctrl+Shift+K`)
 - AI-powered text explanations via context menu
 - Page summarization via context menu
 - Direct AI responses in input fields (`Ctrl+Shift+Enter`)

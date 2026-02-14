@@ -67,6 +67,7 @@ For a complete list of security features and implementation details, see [SECURI
 - **Conversation History**: Maintains full conversation context across multiple interactions
 - **Follow-up Questions**: Ask follow-up questions in the response popup
 - **Response Popup**: Dedicated modal for viewing AI responses with conversation history
+- **Sidebar Panel**: Open the same AI chat in Chrome’s side panel (`Cmd/Ctrl + Shift + L`) or via context menu
 - **Explain This**: Context menu option to explain selected text with AI-powered explanations
 - **Summarize Page**: Context menu option to summarize entire web pages
 - **Encrypted Storage**: API keys encrypted with AES-256-GCM
@@ -133,7 +134,7 @@ This will create the production build in `extension/dist/` directory with:
 ### Resetting Configuration
 
 To reset your configuration:
-- Press `Cmd/Ctrl + Space + Shift` to open the search
+- Press `Cmd/Ctrl + Shift + K` to open the search
 - Press `Shift + Escape` while the search is open
 - This will clear all stored settings and show the configuration screen again
 
@@ -141,7 +142,7 @@ To reset your configuration:
 
 ### Opening the Search Interface
 
-- **Keyboard Shortcut**: `Cmd/Ctrl + Space + Shift`
+- **Keyboard Shortcut**: `Cmd/Ctrl + Shift + K`
 - The search interface will appear as an overlay on the current page
 - If you have text selected, it will automatically populate the search field
 
@@ -163,9 +164,15 @@ To reset your configuration:
 
 **Note**: The response can also be written directly to active input/textarea fields if one is focused.
 
+### Using the Sidebar
+
+- **Keyboard Shortcut**: `Cmd/Ctrl + Shift + L` to open the Open WebUI sidebar in Chrome’s side panel
+- **Context Menu**: Right-click on a page and choose **"Open sidebar"** under "OpenWebUI Extension"
+- The sidebar provides the same search and chat interface in a persistent side panel
+
 ### Using Context Menu Features
 
-The extension adds two context menu options under "OpenWebUI Extension":
+The extension adds context menu options under "OpenWebUI Extension":
 
 #### Explain This
 
@@ -206,17 +213,19 @@ The extension adds two context menu options under "OpenWebUI Extension":
 extension/
 ├── manifest.json          # Chrome extension manifest
 ├── background.js          # Service worker for extension
-├── content.js            # Content script injected into web pages
-├── images/               # Extension icons
-└── extension/            # Svelte application
+├── content.js             # Content script injected into web pages
+├── images/                # Extension icons
+└── extension/             # Svelte application
     ├── src/
-    │   ├── App.svelte    # Main application component
-    │   ├── main.ts       # Application entry point
+    │   ├── App.svelte     # Main application component
+    │   ├── main.ts        # Application entry point (page overlay)
+    │   ├── sidebar.ts     # Side panel entry point
     │   └── lib/
     │       ├── components/  # Svelte components
-    │       ├── apis/        # API integration
-    │       └── utils/       # Utility functions
-    ├── dist/             # Build output (generated)
+    │       ├── apis/       # API integration
+    │       └── utils/      # Utility functions
+    ├── sidebar.html       # Side panel HTML template
+    ├── dist/              # Build output (main.js, style.css, sidebar.html)
     └── package.json      # Dependencies and scripts
 ```
 
@@ -241,6 +250,32 @@ In the `extension/` directory:
 - `npm run build` - Build for production
 - `npm run preview` - Preview production build
 - `npm run check` - Run Svelte type checking
+- `npm test` - Run unit tests (Vitest)
+- `npm run test:coverage` - Run tests with coverage report
+- `npm run test:watch` - Run tests in watch mode
+- `npm run test:deps` - Run dependency audit (`npm audit`) for known vulnerabilities
+
+### Testing
+
+The project uses **Vitest** for unit tests. Security-sensitive logic is covered so regressions are caught early.
+
+| What's tested | Location |
+|---------------|----------|
+| URL validation (SSRF), rate-limit config, validated fetch URLs | `src/lib/background-helpers.test.js` |
+| API layer (getModels, chat completion, Chrome API handling) | `src/lib/apis/index.test.js` |
+| Stream parsing, markdown rendering (including safe escaping) | `src/lib/utils/index.test.js` |
+
+### CI (GitHub Actions)
+
+On **push** and **pull_request** to `main` or `master`, the [CI workflow](.github/workflows/ci.yml) runs:
+
+1. **Install** – `npm ci`
+2. **Dependency audit** – `npm audit --audit-level=high` (fails only on high/critical)
+3. **Type check** – `npm run check`
+4. **Build** – `npm run build`
+5. **Unit tests** – `npm test`
+
+Merging a PR into the default branch triggers the same workflow via push.
 
 ### Development Tips
 
@@ -304,6 +339,11 @@ This fork includes comprehensive security enhancements. For detailed security in
 - ✅ Message action validation
 
 ## Changelog
+
+### 2026-02-14
+- Added sidebar panel: open with `Ctrl+Shift+L` / `Cmd+Shift+L` or via "Open sidebar" context menu
+- Unified keyboard shortcuts in documentation: spotlight search `Ctrl+Shift+K`, sidebar `Ctrl+Shift+L`
+- Updated project structure in README to include sidebar entry point and build output
 
 ### 2026-01-02
 - Enhanced UI responsiveness and user experience with improved modal styles and thinking animation

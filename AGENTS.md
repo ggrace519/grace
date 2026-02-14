@@ -6,6 +6,7 @@ This document provides essential information for AI assistants working on the Op
 
 This is a Chrome Extension (Manifest V3) that integrates with Open WebUI to provide:
 - Spotlight-style search interface (`Ctrl+Shift+K`)
+- Sidebar panel for persistent AI chat (`Ctrl+Shift+L` or context menu "Open sidebar")
 - AI-powered text explanations via context menu
 - Page summarization via context menu
 - Direct AI responses in input fields (`Ctrl+Shift+Enter`)
@@ -46,14 +47,18 @@ This is a Chrome Extension (Manifest V3) that integrates with Open WebUI to prov
    - Manages conversation history
    - Displays streaming responses
    - Handles keyboard shortcuts
-   - Implements "Explain This" and "Summarize Page" features
+   - Implements "Explain This", "Summarize Page", and sidebar mode
    - **CRITICAL**: `onMount` only runs in main frame
 
-6. **`extension/src/lib/utils/index.js`** - Utility Functions
+6. **`extension/src/sidebar.ts`** - Side Panel Entry Point
+   - Mounts the same App/SpotlightSearch in Chrome side panel with `sidebarMode: true`
+   - Uses `extension/sidebar.html` as template; build outputs to `dist/sidebar.html`
+
+7. **`extension/src/lib/utils/index.js`** - Utility Functions
    - `splitStream()` - Parses streaming SSE responses
    - `renderMarkdown()` - Converts markdown to HTML using `marked` library
 
-7. **`extension/src/app.css`** - Global Styles
+8. **`extension/src/app.css`** - Global Styles
    - Tailwind CSS directives
    - CSS isolation rules with `!important` to prevent website CSS conflicts
    - Markdown content styling
@@ -209,8 +214,8 @@ let isRegisteringMenus = false;
 - [ ] Test in main frame (not iframe)
 - [ ] Test with text selected
 - [ ] Test without text selected
-- [ ] Test keyboard shortcuts
-- [ ] Test context menu options
+- [ ] Test keyboard shortcuts (search `Ctrl+Shift+K`, sidebar `Ctrl+Shift+L`)
+- [ ] Test context menu options (Explain This, Summarize Page, Open sidebar)
 - [ ] Test on different websites (especially complex ones like homedepot.com)
 - [ ] Check console for errors
 - [ ] Verify no duplicate initializations
@@ -252,7 +257,8 @@ extension/
 ├── images/                    # Extension icons
 └── extension/                 # Svelte application
     ├── src/
-    │   ├── main.ts            # Entry point (mounts Svelte app)
+    │   ├── main.ts            # Entry point (mounts Svelte app on page)
+    │   ├── sidebar.ts         # Side panel entry point (sidebarMode)
     │   ├── App.svelte         # Root component (minimal wrapper)
     │   ├── app.css            # Global styles + CSS isolation
     │   └── lib/
@@ -262,8 +268,9 @@ extension/
     │       │   └── index.js   # API utilities
     │       └── utils/
     │           └── index.js   # Utilities (splitStream, renderMarkdown)
-    ├── dist/                  # Build output (generated)
-    └── package.json           # Dependencies
+    ├── sidebar.html           # Side panel HTML template
+    ├── dist/                  # Build output (main.js, style.css, sidebar.html)
+    └── package.json           # Dependencies and scripts
 ```
 
 ## 🎯 Common Tasks
@@ -398,6 +405,6 @@ extension/
 
 ---
 
-**Last Updated**: 2025-01-20
+**Last Updated**: 2026-02-14
 **Maintainer**: See README.md for attribution
 

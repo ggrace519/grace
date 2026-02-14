@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a Chrome extension for Open WebUI that provides a spotlight-style search interface for quick AI interactions. The extension connects to a local or remote Open WebUI instance (running Ollama or other LLM backends) and allows users to:
 
 - Get AI responses directly in input fields via keyboard shortcuts
+- Open a persistent sidebar panel for AI chat
 - Extract and summarize page content
 - Get explanations for selected text
 - Maintain conversation history with follow-up questions
@@ -22,14 +23,16 @@ extension/
 ├── content.js             # Content script injector ( DOM setup )
 ├── extension/             # Svelte frontend application
 │   ├── src/
-│   │   ├── main.ts        # Svelte app entry point
+│   │   ├── main.ts        # Svelte app entry point (page overlay)
+│   │   ├── sidebar.ts     # Side panel entry point
 │   │   ├── App.svelte     # Root component
 │   │   └── lib/
 │   │       ├── apis/      # API helpers (background script communication)
 │   │       ├── components/ # Svelte components (SpotlightSearch)
 │   │       ├── utils/     # Markdown rendering, stream splitting
 │   │       └── background/ # Security modules (encryption, rate limiting, URL validation)
-│   ├── dist/              # Build output (generated)
+│   ├── sidebar.html       # Side panel HTML template
+│   ├── dist/              # Build output (main.js, style.css, sidebar.html)
 │   └── package.json
 ```
 
@@ -98,12 +101,14 @@ Tests use Vitest with Node environment:
 ## Keyboard Shortcuts
 
 - `Ctrl+Shift+K` / `Cmd+Shift+K`: Open spotlight search
+- `Ctrl+Shift+L` / `Cmd+Shift+L`: Open Open WebUI sidebar (side panel)
 - `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`: Send selected text for AI response
 
 ## Context Menu Items
 
 - **Summarize Page**: Extract main content and get AI summary
 - **Explain This**: Get AI explanation for selected text
+- **Open sidebar**: Open the AI chat in Chrome’s side panel
 
 ## Build Output
 

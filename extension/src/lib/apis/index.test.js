@@ -1,3 +1,4 @@
+/* global chrome */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getModels, generateOpenAIChatCompletion } from './index.js';
 
@@ -47,7 +48,7 @@ describe('apis', () => {
       chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
         cb({ error: 'Invalid URL' });
       });
-      await expect(getModels('key', 'https://example.com')).rejects.toEqual('Invalid URL');
+      await expect(getModels('key', 'https://example.com')).rejects.toThrow('Invalid URL');
     });
 
     it('rejects on chrome.runtime.lastError', async () => {

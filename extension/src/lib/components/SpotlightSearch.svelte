@@ -3,6 +3,8 @@
   import { generateOpenAIChatCompletion, getModels } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
 
+  type StoredConfig = { url?: string; key?: string; model?: string };
+
   // Helper for user-friendly error messages
   function getUserFriendlyErrorMessage(error: any): string {
     const errorMessage = error?.message || String(error);
@@ -157,7 +159,7 @@
 
     try {
       const isOpenAI = models.length > 0
-        ? models.find((m) => m.id === model)?.owned_by === "openai" ?? false
+        ? (models.find((m) => m.id === model)?.owned_by === "openai")
         : false;
       const endpoint = isOpenAI ? `${url}/openai` : `${url}/ollama/v1`;
 
@@ -385,7 +387,7 @@
       }
     } else {
       try {
-        const storedConfig = await chrome.storage.local.get(["url", "key", "model"]);
+        const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
         if (storedConfig.url) currentUrl = storedConfig.url;
         if (storedConfig.model) currentModel = storedConfig.model;
         
@@ -456,7 +458,7 @@
 
     // Determine endpoint
     const isOpenAI = models.length > 0 
-      ? models.find((m) => m.id === currentModel)?.owned_by === "openai" ?? false
+      ? (models.find((m) => m.id === currentModel)?.owned_by === "openai")
       : false;
     
     const endpoint = isOpenAI ? `${currentUrl}/openai` : `${currentUrl}/ollama/v1`;
@@ -632,7 +634,7 @@
       }
     } else {
       try {
-        const storedConfig = await chrome.storage.local.get(["url", "key", "model"]);
+        const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
         if (storedConfig.url) currentUrl = storedConfig.url;
         if (storedConfig.model) currentModel = storedConfig.model;
         
@@ -704,7 +706,7 @@
 
     // Determine endpoint
     const isOpenAI = models.length > 0 
-      ? models.find((m) => m.id === currentModel)?.owned_by === "openai" ?? false
+      ? (models.find((m) => m.id === currentModel)?.owned_by === "openai")
       : false;
     
     const endpoint = isOpenAI ? `${currentUrl}/openai` : `${currentUrl}/ollama/v1`;
@@ -821,7 +823,7 @@
       }
       
       console.error("Extension: Error explaining text:", error);
-      
+      const errorMsg = error?.message || String(error);
       // Check if it's a rate limit error
       if (errorMsg.includes("Rate limit exceeded")) {
         errorMessage = errorMsg;
@@ -872,7 +874,7 @@
       let currentKey = key;
       
       try {
-        const storedConfig = await chrome.storage.local.get(["url", "key"]);
+        const storedConfig = (await chrome.storage.local.get(["url", "key"])) as StoredConfig;
         if (storedConfig.url) currentUrl = storedConfig.url;
         if (storedConfig.key) {
           // Decrypt API key if needed
@@ -950,7 +952,7 @@
       try {
         const storedConfig = await chrome.storage.local.get(["url"]);
         if (storedConfig.url) {
-          window.open(storedConfig.url, "_blank");
+          window.open(storedConfig.url as string, "_blank");
         }
       } catch (fallbackError) {
         console.error("Extension: Could not open OpenWebUI:", fallbackError);
@@ -1015,7 +1017,7 @@
     let currentModel = model;
 
         try {
-          const storedConfig = await chrome.storage.local.get(["url", "key", "model"]);
+          const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
           if (storedConfig.url) currentUrl = storedConfig.url;
           if (storedConfig.model) currentModel = storedConfig.model;
           
@@ -1049,7 +1051,7 @@
 
     // Determine endpoint
     const isOpenAI = models.length > 0 
-      ? models.find((m) => m.id === currentModel)?.owned_by === "openai" ?? false
+      ? (models.find((m) => m.id === currentModel)?.owned_by === "openai")
       : false;
     
     const endpoint = isOpenAI ? `${currentUrl}/openai` : `${currentUrl}/ollama/v1`;
@@ -1249,7 +1251,7 @@
            errorMsg.includes("Chrome APIs not available");
   };
 
-  onMount(async () => {
+  onMount(() => {
     // Only initialize in main frame to avoid duplicate processing when all_frames: true
     if (window !== window.top) {
       return;
@@ -1408,7 +1410,7 @@
           }
         } else {
           try {
-            const storedConfig = await chrome.storage.local.get(["url", "key", "model"]);
+            const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
             if (storedConfig.url) {
               currentUrl = storedConfig.url;
               url = storedConfig.url;
@@ -1514,7 +1516,7 @@
             // Determine endpoint - check if model is OpenAI compatible
             // If models array is empty (API failed), default to ollama endpoint
             const isOpenAI = models.length > 0 
-              ? models.find((m) => m.id === currentModel)?.owned_by === "openai" ?? false
+              ? (models.find((m) => m.id === currentModel)?.owned_by === "openai")
               : false;
             
             const endpoint = isOpenAI ? `${currentUrl}/openai` : `${currentUrl}/ollama/v1`;
@@ -1648,7 +1650,7 @@
           }
           
           console.error("Extension: Error getting AI response:", error);
-          
+          const errorMsg = error?.message || String(error);
           // Check if it's a rate limit error
           if (errorMsg.includes("Rate limit exceeded")) {
             errorMessage = errorMsg;
@@ -1685,7 +1687,8 @@
     // Attach event listener immediately, before async operations
     document.addEventListener("keydown", down, { capture: true, passive: false });
     
-    // Now load configuration asynchronously
+    // Load configuration asynchronously (IIFE so onMount can return sync cleanup)
+    (async () => {
     let _storageCache = null;
 
     // Check Chrome API availability before using
@@ -1786,6 +1789,7 @@
       // No config found - show config screen
       showConfig = true;
     }
+    })();
     
     return () => {
       document.removeEventListener("keydown", down);

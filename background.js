@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'summarizePage', 'explainText', 'openSidePanel'];
+const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'summarizePage', 'explainText', 'openSidePanel'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -789,7 +789,7 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
   }
 
   // Validate sender - allow certain actions without tab validation
-  const actionsWithoutTab = ['fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel'];
+  const actionsWithoutTab = ['fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent'];
   const needsTab = !actionsWithoutTab.includes(request.action);
 
   // For actions that need a tab, try to get it from the message or query active tab
@@ -970,6 +970,29 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     (async () => {
       try {
         const result = await handleExtractPageContent(id);
+        sendResponse(result);
+      } catch (error) {
+        const friendlyError = getUserFriendlyErrorMessage(error);
+        sendResponse({ error: friendlyError });
+      }
+    })();
+    return true;
+  } else if (request.action == "getActiveTabPageContent") {
+    // Used by the sidebar to get the current tab's page content as context for the conversation.
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tabs || !tabs[0]) {
+          sendResponse({ error: "No active tab" });
+          return;
+        }
+        const tabId = tabs[0].id;
+        // Chrome extension pages and similar cannot be scripted
+        if (tabs[0].url && (tabs[0].url.startsWith("chrome://") || tabs[0].url.startsWith("chrome-extension://") || tabs[0].url.startsWith("edge://") || tabs[0].url.startsWith("about:"))) {
+          sendResponse({ error: "Cannot access this page" });
+          return;
+        }
+        const result = await handleExtractPageContent(tabId);
         sendResponse(result);
       } catch (error) {
         const friendlyError = getUserFriendlyErrorMessage(error);

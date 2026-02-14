@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { generateOpenAIChatCompletion, getModels } from "../apis";
+  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
 
   type StoredConfig = { url?: string; key?: string; model?: string };
@@ -148,11 +148,38 @@
     // Add user message to history
     conversationHistory = [...conversationHistory, { role: "user", content: userMessage }];
 
+    // When this is the first message in the sidebar, include the current page content as context
+    let systemContent = "You are a helpful assistant. Provide clear and concise responses. Use markdown formatting when appropriate.";
+    const isFirstMessage = conversationHistory.length === 1;
+    if (sidebarMode && isFirstMessage) {
+      try {
+        const pageResult = await getActiveTabPageContent();
+        if (pageResult?.data && pageResult.data.trim().length > 0) {
+          const maxPageChars = 12000;
+          const pageContext = pageResult.data.length > maxPageChars
+            ? pageResult.data.substring(0, maxPageChars) + "\n\n[Content truncated for length.]"
+            : pageResult.data;
+          systemContent = `You are a helpful AI assistant in the Open WebUI side panel. The user can have any conversation they want. Below is the extracted text from the web page they currently have open—use it as context when their questions relate to the page (e.g. summarizing, explaining, or tasks based on it). If they ask about something not in the content, answer from your general knowledge and say so when it's not from the page. When they do refer to the page, base your answer on what is actually there. Keep a clear, friendly tone and use markdown when it helps. You only respond in the panel; you cannot interact with the browser.
+
+---
+Page content:
+---
+${pageContext}
+---
+End of page content.
+---`;
+        }
+      } catch (e) {
+        // If page content cannot be fetched (e.g. chrome:// or protected), continue with default system prompt
+        console.debug("Extension: Could not get page context for sidebar:", e);
+      }
+    }
+
     // Build messages with system prompt
     const messages = [
       {
         role: "system",
-        content: "You are a helpful assistant. Provide clear and concise responses. Use markdown formatting when appropriate."
+        content: systemContent
       },
       ...conversationHistory.filter(m => m.role !== "system")
     ];

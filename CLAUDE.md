@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a Chrome extension for Open WebUI that provides a spotlight-style search interface for quick AI interactions. The extension connects to a local or remote Open WebUI instance (running Ollama or other LLM backends) and allows users to:
 
 - Get AI responses directly in input fields via keyboard shortcuts
-- Open a persistent sidebar panel for AI chat
+- Open a persistent sidebar panel for AI chat (first message in a conversation can include the current tab’s page content as optional context for page-related or general conversation)
 - Extract and summarize page content
 - Get explanations for selected text
 - Maintain conversation history with follow-up questions
@@ -108,7 +108,7 @@ Tests use Vitest with Node environment:
 
 - **Summarize Page**: Extract main content and get AI summary
 - **Explain This**: Get AI explanation for selected text
-- **Open sidebar**: Open the AI chat in Chrome’s side panel
+- **Open sidebar**: Open the AI chat in Chrome’s side panel (page context is included on first message when available)
 
 ## Build Output
 

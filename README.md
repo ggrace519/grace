@@ -37,6 +37,7 @@ This fork includes several security and feature enhancements:
 - **Follow-up Questions**: Ask follow-up questions directly in the response popup without starting a new conversation
 - **Response Popup**: Dedicated popup modal for AI responses with streaming display
 - **Copy Conversation**: One-click copy of entire conversation history
+- **Sidebar with Page Context**: Side panel chat that can include the current tab’s content as optional context on your first message, so you can ask about the page or have any conversation
 - **Explain This**: Right-click on selected text to get AI-powered explanations with definitions, examples, and related concepts
 - **Summarize Page**: Right-click on any page to get an AI-generated summary of the page content
 - **Improved Error Handling**: User-friendly error messages, especially for rate limit violations
@@ -67,7 +68,7 @@ For a complete list of security features and implementation details, see [SECURI
 - **Conversation History**: Maintains full conversation context across multiple interactions
 - **Follow-up Questions**: Ask follow-up questions in the response popup
 - **Response Popup**: Dedicated modal for viewing AI responses with conversation history
-- **Sidebar Panel**: Open the same AI chat in Chrome’s side panel (`Cmd/Ctrl + Shift + L`) or via context menu
+- **Sidebar Panel**: Open the same AI chat in Chrome’s side panel (`Cmd/Ctrl + Shift + L`) or via context menu. On your first message, the current tab’s page content is included as optional context so you can ask about the page or have any conversation
 - **Explain This**: Context menu option to explain selected text with AI-powered explanations
 - **Summarize Page**: Context menu option to summarize entire web pages
 - **Encrypted Storage**: API keys encrypted with AES-256-GCM
@@ -169,6 +170,7 @@ To reset your configuration:
 - **Keyboard Shortcut**: `Cmd/Ctrl + Shift + L` to open the Open WebUI sidebar in Chrome’s side panel
 - **Context Menu**: Right-click on a page and choose **"Open sidebar"** under "OpenWebUI Extension"
 - The sidebar provides the same search and chat interface in a persistent side panel
+- **Page context**: You can have any conversation in the sidebar. When you send your **first message**, the extension includes the text content of the **current tab** as context for the model. If your questions relate to the page (e.g. summarize, explain, or tasks based on it), the model uses that content; otherwise you can chat about anything and the model will respond normally. Follow-up messages in the same conversation keep the page context available
 
 ### Using Context Menu Features
 
@@ -342,6 +344,8 @@ This fork includes comprehensive security enhancements. For detailed security in
 
 ### 2026-02-14
 - Added sidebar panel: open with `Ctrl+Shift+L` / `Cmd+Shift+L` or via "Open sidebar" context menu
+- Sidebar page context: on the first message in a conversation, the current tab’s extracted text is included as optional context so users can ask about the page or have any conversation; the model uses page content when questions relate to it
+- Custom system prompt for sidebar that supports both page-related and general conversation
 - Unified keyboard shortcuts in documentation: spotlight search `Ctrl+Shift+K`, sidebar `Ctrl+Shift+L`
 - Updated project structure in README to include sidebar entry point and build output
 

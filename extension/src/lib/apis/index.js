@@ -143,6 +143,30 @@ export const getModels = async (key, url) => {
   });
 };
 
+/**
+ * Get the main text content of the currently active browser tab.
+ * Used by the sidebar to include page context in the conversation.
+ * @returns {Promise<{ data?: string, error?: string }>}
+ */
+export const getActiveTabPageContent = () => {
+  if (!isChromeAPIAvailable()) {
+    return Promise.resolve({ error: "Chrome APIs not available" });
+  }
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "getActiveTabPageContent" }, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({ error: chrome.runtime.lastError.message });
+        return;
+      }
+      if (response?.error) {
+        resolve({ error: response.error });
+        return;
+      }
+      resolve({ data: response?.data ?? "" });
+    });
+  });
+};
+
 export const generateOpenAIChatCompletion = async (
   api_key = "",
   body = {},

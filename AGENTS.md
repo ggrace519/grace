@@ -6,7 +6,7 @@ This document provides essential information for AI assistants working on the Op
 
 This is a Chrome Extension (Manifest V3) that integrates with Open WebUI to provide:
 - Spotlight-style search interface (`Ctrl+Shift+K`)
-- Sidebar panel for persistent AI chat (`Ctrl+Shift+L` or context menu "Open sidebar")
+- Sidebar panel for persistent AI chat (`Ctrl+Shift+L` or context menu "Open sidebar"). On the first message in a conversation, the current tab’s page content is included as optional context so the user can ask about the page or have any conversation
 - AI-powered text explanations via context menu
 - Page summarization via context menu
 - Direct AI responses in input fields (`Ctrl+Shift+Enter`)
@@ -47,7 +47,7 @@ This is a Chrome Extension (Manifest V3) that integrates with Open WebUI to prov
    - Manages conversation history
    - Displays streaming responses
    - Handles keyboard shortcuts
-   - Implements "Explain This", "Summarize Page", and sidebar mode
+   - Implements "Explain This", "Summarize Page", and sidebar mode. In sidebar mode, the first message in a conversation fetches the active tab’s content via `getActiveTabPageContent` and injects it into the system prompt as optional context
    - **CRITICAL**: `onMount` only runs in main frame
 
 6. **`extension/src/sidebar.ts`** - Side Panel Entry Point
@@ -109,14 +109,10 @@ if ((window as any)[GLOBAL_INIT_KEY]) {
 - Background sends to content: `chrome.tabs.sendMessage(tabId, { action: '...', ... })`
 
 **Allowed Actions** (defined in `ALLOWED_ACTIONS` array):
-- `getConfig`
-- `saveConfig`
-- `getModels`
-- `chatCompletion`
-- `extractPageContent`
-- `explainText`
-- `summarizePage`
-- `continueInOpenWebUI`
+- `getSelection`, `writeText`, `fetchModels`, `toggleSearch`
+- `encryptApiKey`, `decryptApiKey`, `createChat`
+- `extractPageContent`, `getActiveTabPageContent` (sidebar: current tab content as context)
+- `summarizePage`, `explainText`, `openSidePanel`
 
 ### 4. Error Handling
 

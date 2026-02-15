@@ -168,6 +168,8 @@ ${pageContext}
 ---
 End of page content.
 ---`;
+        } else if (pageResult?.error) {
+          console.debug("Extension: Sidebar page context unavailable:", pageResult.error);
         }
       } catch (e) {
         // If page content cannot be fetched (e.g. chrome:// or protected), continue with default system prompt
@@ -407,9 +409,15 @@ End of page content.
     let currentModel = model;
 
     if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available - cannot get config");
+      console.debug("Extension: Chrome APIs not available - cannot get config");
       if (!currentUrl || !currentKey || !currentModel) {
-        showConfig = true;
+        showResponse = true;
+        showError = true;
+        errorMessage = "Extension was reloaded or is unavailable. Please refresh the page and try again.";
+        setTimeout(() => {
+          showError = false;
+          errorMessage = "";
+        }, 8000);
         return;
       }
     } else {
@@ -454,10 +462,16 @@ End of page content.
       }
     }
 
-    // Check if we have valid config
+    // Check if we have valid config - show modal with error so user sees the response UI
     if (!currentUrl || !currentKey || !currentModel) {
       console.warn("Extension: Missing configuration. Please configure the extension first.");
-      showConfig = true;
+      showResponse = true;
+      showError = true;
+      errorMessage = "Please configure the extension first. Use the search bar settings (gear icon) to set Open WebUI URL, API key, and model.";
+      setTimeout(() => {
+        showError = false;
+        errorMessage = "";
+      }, 8000);
       return;
     }
 
@@ -654,9 +668,15 @@ End of page content.
     let currentModel = model;
 
     if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available - cannot get config");
+      console.debug("Extension: Chrome APIs not available - cannot get config");
       if (!currentUrl || !currentKey || !currentModel) {
-        showConfig = true;
+        showResponse = true;
+        showError = true;
+        errorMessage = "Extension was reloaded or is unavailable. Please refresh the page and try again.";
+        setTimeout(() => {
+          showError = false;
+          errorMessage = "";
+        }, 8000);
         return;
       }
     } else {
@@ -702,10 +722,16 @@ End of page content.
       }
     }
 
-    // Check if we have valid config
+    // Check if we have valid config - show modal with error so user sees the response UI
     if (!currentUrl || !currentKey || !currentModel) {
       console.warn("Extension: Missing configuration. Please configure the extension first.");
-      showConfig = true;
+      showResponse = true;
+      showError = true;
+      errorMessage = "Please configure the extension first. Use the search bar settings (gear icon) to set Open WebUI URL, API key, and model.";
+      setTimeout(() => {
+        showError = false;
+        errorMessage = "";
+      }, 8000);
       return;
     }
 
@@ -1254,16 +1280,18 @@ End of page content.
     }
   };
 
-  // Helper function to check if Chrome APIs are available
+  // Helper function to check if Chrome APIs are available.
+  // Use globalThis to read chrome so we get the real extension API in side panel / extension pages.
   const isChromeAPIAvailable = (): boolean => {
     try {
-      return typeof chrome !== 'undefined' && 
-             chrome !== null && 
-             typeof chrome.storage !== 'undefined' && 
-             chrome.storage !== null &&
-             typeof chrome.storage.local !== 'undefined' &&
-             typeof chrome.runtime !== 'undefined' &&
-             chrome.runtime !== null;
+      const c = typeof globalThis !== 'undefined' ? (globalThis as any).chrome : undefined;
+      return typeof c !== 'undefined' && 
+             c !== null && 
+             typeof c.storage !== 'undefined' && 
+             c.storage !== null &&
+             typeof c.storage.local !== 'undefined' &&
+             typeof c.runtime !== 'undefined' &&
+             c.runtime !== null;
     } catch {
       return false;
     }
@@ -1290,34 +1318,17 @@ End of page content.
       showConfig = false;
     }
 
-    // Check if Chrome APIs are available
-    if (!isChromeAPIAvailable()) {
-      console.warn("Extension: Chrome APIs not available. Extension may have been reloaded or context invalidated.");
-      return;
-    }
-    
-    // Store toggle function globally so injected scripts can call it
-    window.openWebUIToggleSearch = toggleSearch;
-    
-    // Listen for custom event from background script (keyboard shortcut)
+    // Define handlers first so they can be registered in both branches
     const handleToggleEvent = () => {
       toggleSearch();
     };
-    window.addEventListener("open-webui-toggle-search", handleToggleEvent);
-    
-    // Listen for custom event for summarize page (fallback)
     const handleSummarizeEvent = (event: CustomEvent) => {
       if (event.detail && event.detail.content) {
         summarizePage(event.detail.content);
       }
     };
-    window.addEventListener("open-webui-summarize-page", handleSummarizeEvent as EventListener);
-    
-    // Listen for custom event for explain text (fallback)
-    // Only process in main frame to avoid duplicate processing when all_frames: true
     let isExplaining = false;
     const handleExplainTextEvent = (event: CustomEvent) => {
-      // Only process in main frame and prevent duplicate processing
       if (window === window.top && !isExplaining && event.detail && event.detail.text) {
         isExplaining = true;
         explainText(event.detail.text).finally(() => {
@@ -1325,12 +1336,8 @@ End of page content.
         });
       }
     };
-    window.addEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
-    
-    // Also listen for messages as fallback
-    // Only process in main frame to avoid duplicate processing when all_frames: true
     let isSummarizing = false;
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const messageListener = (request: { action: string; content?: string; text?: string; error?: string }, _sender: unknown, sendResponse: (r: { success: boolean }) => void) => {
       if (request.action === "toggleSearch") {
         // Only process in main frame
         if (window === window.top) {
@@ -1386,7 +1393,37 @@ End of page content.
         sendResponse({ success: true });
       }
       return true;
-    });
+    };
+
+    // Register listeners. In sidebar mode we're in the extension side panel so Chrome APIs exist — always try.
+    const tryRegisterChrome = () => {
+      try {
+        if (typeof (globalThis as any).chrome !== 'undefined' && (globalThis as any).chrome?.runtime?.onMessage) {
+          window.openWebUIToggleSearch = toggleSearch;
+          window.addEventListener("open-webui-toggle-search", handleToggleEvent);
+          window.addEventListener("open-webui-summarize-page", handleSummarizeEvent as EventListener);
+          window.addEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
+          (globalThis as any).chrome.runtime.onMessage.addListener(messageListener);
+          return true;
+        }
+      } catch (_) {
+        // ignore
+      }
+      return false;
+    };
+    if (sidebarMode || isChromeAPIAvailable()) {
+      if (!tryRegisterChrome()) {
+        if (!sidebarMode) {
+          console.debug("Extension: Chrome APIs not available. Extension may have been reloaded or context invalidated.");
+        }
+        window.addEventListener("open-webui-summarize-page", handleSummarizeEvent as EventListener);
+        window.addEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
+      }
+    } else {
+      console.debug("Extension: Chrome APIs not available. Extension may have been reloaded or context invalidated.");
+      window.addEventListener("open-webui-summarize-page", handleSummarizeEvent as EventListener);
+      window.addEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
+    }
 
     const down = async (e) => {
       // Reset the configuration when ⌘Shift+Escape is pressed
@@ -1717,16 +1754,18 @@ End of page content.
     // Load configuration asynchronously (IIFE so onMount can return sync cleanup)
     (async () => {
     let _storageCache = null;
+    const chromeApi = typeof globalThis !== 'undefined' ? (globalThis as any).chrome : undefined;
+    const canLoadConfig = sidebarMode ? (chromeApi?.storage?.local != null) : isChromeAPIAvailable();
 
-    // Check Chrome API availability before using
-    if (!isChromeAPIAvailable()) {
+    if (!canLoadConfig) {
       console.debug("Extension: Chrome APIs not available for config loading");
       showConfig = true;
       return;
     }
 
     try {
-      _storageCache = await chrome.storage.local.get();
+      const storage = (chromeApi ?? (typeof globalThis !== 'undefined' ? (globalThis as any).chrome : null))?.storage?.local;
+      _storageCache = storage ? await storage.get() : null;
     } catch (error) {
       if (isContextInvalidatedError(error)) {
         // Expected when extension is reloaded - use debug level
@@ -1742,32 +1781,29 @@ End of page content.
       
       // Decrypt API key if it exists
       if (_storageCache.key) {
-        if (isChromeAPIAvailable()) {
+        const runtime = (chromeApi ?? (typeof chrome !== 'undefined' ? chrome : null))?.runtime;
+        if (runtime?.sendMessage) {
           try {
-            const decryptionResponse = await chrome.runtime.sendMessage({
+            const decryptionResponse = await runtime.sendMessage({
               action: "decryptApiKey",
               encryptedApiKey: _storageCache.key
             });
             
-            if (decryptionResponse.error) {
+            if (decryptionResponse?.error) {
               console.error("Extension: Failed to decrypt API key:", decryptionResponse.error);
-              // Use as-is (might be unencrypted for backward compatibility)
               key = _storageCache.key;
             } else {
-              key = decryptionResponse.decrypted;
+              key = decryptionResponse.decrypted ?? _storageCache.key;
             }
           } catch (error) {
             if (isContextInvalidatedError(error)) {
-              // Expected when extension is reloaded - use debug level
               console.debug("Extension: Chrome runtime API not available - using stored key as-is");
             } else {
               console.error("Extension: Error decrypting API key:", error);
             }
-            // Use as-is (might be unencrypted for backward compatibility)
             key = _storageCache.key;
           }
         } else {
-          // Chrome APIs not available - use key as-is
           key = _storageCache.key;
         }
       } else {

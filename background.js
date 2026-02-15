@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'summarizePage', 'explainText', 'openSidePanel'];
+const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -505,6 +505,34 @@ async function handleExtractPageContent(tabId) {
   }
 }
 
+// Key for storing which tab's context the side panel should use (session only)
+const SIDE_PANEL_CONTEXT_TAB_KEY = "sidePanelContextTabId";
+
+function runToggleSearchForTab(tab) {
+  if (!tab || !tab.id) return;
+  const url = tab.url || "";
+  if (url.startsWith("chrome://") ||
+      url.startsWith("chrome-extension://") ||
+      url.startsWith("chrome-search://") ||
+      url.startsWith("edge://") ||
+      url.startsWith("about:")) {
+    return;
+  }
+  chrome.tabs.sendMessage(tab.id, { action: "toggleSearch" }).catch(() => {
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      func: () => {
+        window.dispatchEvent(new CustomEvent("open-webui-toggle-search", { bubbles: true }));
+        if (window.openWebUIToggleSearch && typeof window.openWebUIToggleSearch === "function") {
+          try {
+            window.openWebUIToggleSearch();
+          } catch (e) {}
+        }
+      }
+    }).catch(() => {});
+  });
+}
+
 // ============================================================================
 // ENHANCEMENT: Keyboard Shortcut Handling via Commands API
 // ============================================================================
@@ -551,9 +579,24 @@ chrome.commands.onCommand.addListener(function (command) {
       }
     });
   } else if (command === "open-sidebar") {
-    // Open the side panel
-    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
-      console.error("Error opening side panel:", err);
+    // Resolve active tab, store for side panel context, then open panel
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0]) {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
+          const tabId = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0].id : null;
+          if (tabId != null) {
+            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
+          }
+          chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
+            console.error("Error opening side panel:", err);
+          });
+        });
+      } else {
+        chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabs[0].id }).catch(() => {});
+        chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
+          console.error("Error opening side panel:", err);
+        });
+      }
     });
   }
 });
@@ -616,6 +659,19 @@ function registerContextMenus() {
             }
           });
 
+          chrome.contextMenus.create({
+            id: 'open-search',
+            parentId: 'openwebui-extension',
+            title: 'Open search',
+            contexts: ['page', 'selection', 'editable']
+          }, () => {
+            if (chrome.runtime.lastError) {
+              console.error("Extension: Error creating open search context menu:", chrome.runtime.lastError.message);
+            } else {
+              console.log("Extension: Open search context menu created successfully");
+            }
+          });
+
           // Add "Open Sidebar" context menu
           chrome.contextMenus.create({
             id: 'open-sidebar',
@@ -654,9 +710,12 @@ chrome.runtime.onStartup.addListener(() => {
 // ============================================================================
 // ENHANCEMENT: Extension Icon Click Handler
 // ============================================================================
-// Open side panel when clicking the extension toolbar icon
+// Open side panel when clicking the extension toolbar icon; store tab for context
 chrome.action.onClicked.addListener(async (tab) => {
   try {
+    if (tab && tab.id != null) {
+      await chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id });
+    }
     await chrome.sidePanel.open({ tabId: tab.id });
   } catch (error) {
     console.error("Error opening side panel:", error);
@@ -769,8 +828,45 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         console.error("Extension: Error injecting explain text script:", err);
       });
     });
+  } else if (info.menuItemId === 'open-search') {
+    if (!tab || !tab.id) return;
+    const url = tab.url || "";
+    if (url.startsWith("chrome://") ||
+        url.startsWith("chrome-extension://") ||
+        url.startsWith("chrome-search://") ||
+        url.startsWith("edge://") ||
+        url.startsWith("about:")) {
+      console.log("Extension cannot access this page:", url);
+      return;
+    }
+    chrome.tabs.sendMessage(tab.id, { action: "toggleSearch" }).then(() => {
+      console.log("Extension: Open search message sent to tab");
+    }).catch((error) => {
+      console.log("Open search message failed, trying script injection:", error);
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        func: () => {
+          window.dispatchEvent(new CustomEvent("open-webui-toggle-search", { bubbles: true }));
+          if (window.openWebUIToggleSearch && typeof window.openWebUIToggleSearch === "function") {
+            try {
+              window.openWebUIToggleSearch();
+            } catch (e) {
+              console.error("Extension: Error calling toggle function:", e);
+            }
+          }
+        }
+      }).catch((err) => {
+        if (err.message && err.message.includes("Cannot access contents")) {
+          console.log("Extension: Page cannot be accessed (restricted page)");
+        } else {
+          console.error("Extension: Error injecting open search script:", err);
+        }
+      });
+    });
   } else if (info.menuItemId === 'open-sidebar') {
-    // Open the side panel
+    if (tab && tab.id != null) {
+      chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
+    }
     chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
       console.error("Error opening side panel:", err);
     });
@@ -789,7 +885,7 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
   }
 
   // Validate sender - allow certain actions without tab validation
-  const actionsWithoutTab = ['fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent'];
+  const actionsWithoutTab = ['fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup'];
   const needsTab = !actionsWithoutTab.includes(request.action);
 
   // For actions that need a tab, try to get it from the message or query active tab
@@ -978,19 +1074,73 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     })();
     return true;
   } else if (request.action == "getActiveTabPageContent") {
-    // Used by the sidebar to get the current tab's page content as context for the conversation.
+    // Used by the sidebar to get the current tab's page content. Prefer the tab that opened the panel (stored in session).
     (async () => {
       try {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tabs || !tabs[0]) {
-          sendResponse({ error: "No active tab" });
-          return;
+        let tabId = null;
+        let url = "";
+
+        const stored = await chrome.storage.session.get(SIDE_PANEL_CONTEXT_TAB_KEY).catch(() => ({}));
+        const storedTabId = stored[SIDE_PANEL_CONTEXT_TAB_KEY];
+
+        if (storedTabId != null) {
+          try {
+            const tab = await chrome.tabs.get(storedTabId);
+            if (tab && tab.id && tab.url) {
+              const u = tab.url;
+              if (!u.startsWith("chrome://") && !u.startsWith("chrome-extension://") && !u.startsWith("edge://") && !u.startsWith("about:")) {
+                tabId = tab.id;
+                url = u;
+              }
+            }
+          } catch (_) {
+            // Tab no longer exists or invalid; fall through to query
+          }
         }
-        const tabId = tabs[0].id;
-        // Chrome extension pages and similar cannot be scripted
-        if (tabs[0].url && (tabs[0].url.startsWith("chrome://") || tabs[0].url.startsWith("chrome-extension://") || tabs[0].url.startsWith("edge://") || tabs[0].url.startsWith("about:"))) {
+
+        if (tabId == null) {
+          let tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tabs || !tabs[0]) {
+            tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          }
+          if (!tabs || !tabs[0]) {
+            sendResponse({ error: "No active tab" });
+            return;
+          }
+          tabId = tabs[0].id;
+          url = tabs[0].url || "";
+        }
+
+        if (url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:")) {
           sendResponse({ error: "Cannot access this page" });
           return;
+        }
+
+        // Try content script first (Rovo pattern); fallback to executeScript
+        try {
+          const contentScriptResponse = await new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tabId, { action: "getPageContent" }, (response) => {
+              if (chrome.runtime.lastError) {
+                reject(chrome.runtime.lastError);
+              } else {
+                resolve(response);
+              }
+            });
+          });
+          if (contentScriptResponse && (contentScriptResponse.data !== undefined || contentScriptResponse.error)) {
+            const data = contentScriptResponse.data ?? "";
+            const trimmed = typeof data === "string" ? data.trim() : "";
+            if (trimmed.length >= 50) {
+              sendResponse({ data: data });
+              return;
+            }
+            if (contentScriptResponse.error) {
+              sendResponse({ error: contentScriptResponse.error });
+              return;
+            }
+          }
+        } catch (_) {
+          // Content script not available or didn't respond; fall back to executeScript
         }
         const result = await handleExtractPageContent(tabId);
         sendResponse(result);
@@ -1059,6 +1209,38 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
       sendResponse({ success: true });
     }).catch((err) => {
       sendResponse({ error: err.message });
+    });
+    return true;
+  } else if (request.action == "openSearchFromPopup") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0]) {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
+          const t = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0] : null;
+          if (t) runToggleSearchForTab(t);
+          sendResponse(t ? {} : { error: "No active tab" });
+        });
+      } else {
+        runToggleSearchForTab(tabs[0]);
+        sendResponse({});
+      }
+    });
+    return true;
+  } else if (request.action == "openSidebarFromPopup") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0]) {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
+          const t = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0] : null;
+          if (t && t.id != null) {
+            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: t.id }).catch(() => {});
+          }
+          chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(() => sendResponse({ success: true })).catch((err) => sendResponse({ error: err.message }));
+        });
+      } else {
+        if (tabs[0].id != null) {
+          chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabs[0].id }).catch(() => {});
+        }
+        chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(() => sendResponse({ success: true })).catch((err) => sendResponse({ error: err.message }));
+      }
     });
     return true;
   } else {

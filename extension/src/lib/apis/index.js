@@ -1,11 +1,21 @@
-// Helper function to check if Chrome APIs are available
+// Use globalThis so Chrome API is found in extension pages (e.g. side panel) where
+// the global "chrome" may not be in scope for the module.
+const getChrome = () => {
+  try {
+    if (typeof globalThis !== 'undefined' && globalThis.chrome) return globalThis.chrome;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const isChromeAPIAvailable = () => {
   try {
-    return typeof chrome !== 'undefined' &&
-           chrome !== null &&
-           typeof chrome.runtime !== 'undefined' &&
-           chrome.runtime !== null &&
-           typeof chrome.runtime.sendMessage !== 'undefined';
+    const c = getChrome();
+    return c != null &&
+           typeof c.runtime !== 'undefined' &&
+           c.runtime != null &&
+           typeof c.runtime.sendMessage === 'function';
   } catch {
     return false;
   }
@@ -90,14 +100,14 @@ export function withErrorHandling(apiCall) {
 }
 
 export const getModels = async (key, url) => {
-  // Check Chrome API availability
-  if (!isChromeAPIAvailable()) {
+  const c = getChrome();
+  if (!c?.runtime?.sendMessage) {
     return Promise.reject(new Error("Extension context invalidated - Chrome APIs not available"));
   }
 
   // Proxy through background script to avoid CORS
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(
+    c.runtime.sendMessage(
       {
         action: "fetchModels",
         url: url,
@@ -146,24 +156,32 @@ export const getModels = async (key, url) => {
 /**
  * Get the main text content of the currently active browser tab.
  * Used by the sidebar to include page context in the conversation.
+ * Always attempts the message send so the side panel (extension context) can get page content
+ * even if isChromeAPIAvailable() is false due to timing or environment.
  * @returns {Promise<{ data?: string, error?: string }>}
  */
 export const getActiveTabPageContent = () => {
-  if (!isChromeAPIAvailable()) {
-    return Promise.resolve({ error: "Chrome APIs not available" });
-  }
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: "getActiveTabPageContent" }, (response) => {
-      if (chrome.runtime.lastError) {
-        resolve({ error: chrome.runtime.lastError.message });
+    try {
+      const c = getChrome();
+      if (!c?.runtime?.sendMessage) {
+        resolve({ error: "Chrome APIs not available" });
         return;
       }
-      if (response?.error) {
-        resolve({ error: response.error });
-        return;
-      }
-      resolve({ data: response?.data ?? "" });
-    });
+      c.runtime.sendMessage({ action: "getActiveTabPageContent" }, (response) => {
+        if (c.runtime?.lastError) {
+          resolve({ error: c.runtime.lastError.message });
+          return;
+        }
+        if (response?.error) {
+          resolve({ error: response.error });
+          return;
+        }
+        resolve({ data: response?.data ?? "" });
+      });
+    } catch (e) {
+      resolve({ error: (e?.message && String(e.message)) || "Chrome APIs not available" });
+    }
   });
 };
 
@@ -172,14 +190,14 @@ export const generateOpenAIChatCompletion = async (
   body = {},
   url = "http://localhost:8080"
 ) => {
-  // Check Chrome API availability
-  if (!isChromeAPIAvailable() || typeof chrome.runtime.connect === 'undefined') {
+  const c = getChrome();
+  if (!c?.runtime?.connect) {
     return Promise.reject(new Error("Extension context invalidated - Chrome runtime.connect not available"));
   }
-  
+
   // Create a port for streaming data from background script
   return new Promise((resolve, reject) => {
-    const port = chrome.runtime.connect({ name: "chat-stream" });
+    const port = c.runtime.connect({ name: "chat-stream" });
     let controller = null;
     let streamEnded = false;
     

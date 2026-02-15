@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a Chrome extension for Open WebUI that provides a spotlight-style search interface for quick AI interactions. The extension connects to a local or remote Open WebUI instance (running Ollama or other LLM backends) and allows users to:
 
 - Get AI responses directly in input fields via keyboard shortcuts
-- Open a persistent sidebar panel for AI chat (first message in a conversation can include the current tab’s page content as optional context for page-related or general conversation)
+- Open a persistent sidebar panel for AI chat (first message can include the current tab’s page content as context)
 - Extract and summarize page content
 - Get explanations for selected text
 - Maintain conversation history with follow-up questions
@@ -18,48 +18,59 @@ This is a Chrome extension for Open WebUI that provides a spotlight-style search
 
 ```
 extension/
-├── manifest.json          # Chrome Manifest V3 configuration
-├── background.js          # Service worker (API calls, rate limiting, context menus)
-├── content.js             # Content script injector ( DOM setup )
-├── extension/             # Svelte frontend application
+├── manifest.json           # Chrome Manifest V3 (content scripts, side panel, popup, commands)
+├── background.js           # Service worker (API calls, rate limiting, context menus)
+├── content.js              # Content script (DOM setup for in-page app)
+├── popup.html / popup.js   # Extension icon popup ("Open search" / "Open sidebar")
+├── extension/
 │   ├── src/
-│   │   ├── main.ts        # Svelte app entry point (page overlay)
-│   │   ├── sidebar.ts     # Side panel entry point
-│   │   ├── App.svelte     # Root component
+│   │   ├── main.ts         # Svelte entry for in-page overlay
+│   │   ├── sidebar.ts     # Side panel entry (mounts app with sidebarMode: true)
+│   │   ├── App.svelte      # Root component
 │   │   └── lib/
-│   │       ├── apis/      # API helpers (background script communication)
-│   │       ├── components/ # Svelte components (SpotlightSearch)
-│   │       ├── utils/     # Markdown rendering, stream splitting
-│   │       └── background/ # Security modules (encryption, rate limiting, URL validation)
-│   ├── sidebar.html       # Side panel HTML template
-│   ├── dist/              # Build output (main.js, style.css, sidebar.html)
+│   │       ├── apis/       # API helpers (sendMessageWithRetry, getSidebarInit, etc.)
+│   │       ├── components/ # SpotlightSearch.svelte (main UI)
+│   │       └── utils/      # Markdown, stream splitting
+│   ├── vite.content.config.ts  # Builds IIFE bundle for content script
+│   ├── dist/               # Build output (git-ignored)
+│   │   ├── main.js, sidebar.js, chunk.js, style.css
+│   │   ├── index.html, sidebar.html
+│   │   └── main-content.js # In-page app bundle (no modules)
 │   └── package.json
 ```
 
 ### Component Relationship
 
 ```
-User Action → content.js → background.js (Service Worker) → Open WebUI API
-                                ↓
-                      Returns via ports/messages
-                                ↓
-                      content.js → Svelte App → User Interface
+User Action → content.js / popup / side panel / command
+       → background.js (Service Worker) → Open WebUI API
+       → Returns via sendResponse or ports (streaming)
+       → Svelte App (SpotlightSearch) → UI
 ```
 
 ### Key Architectural Patterns
 
-1. **Manifest V3 Architecture**: Uses service workers instead of background pages
-2. **Message Passing**: Content scripts communicate with background service worker via `chrome.runtime.sendMessage`
-3. **Streaming via Ports**: Chat completions use `chrome.runtime.connect()` with ReadableStreams for real-time response streaming
-4. **Security-First Design**:
-   - API keys encrypted with AES-256-GCM (key derived from extension ID)
-   - SSRF protection via URL validation
-   - Rate limiting on all API endpoints
-   - Message action whitelist
+1. **Manifest V3**: Service worker (no long-lived background page).
+2. **Message passing**: UI talks to background via `chrome.runtime.sendMessage`. Use **sendMessageWithRetry** (in `apis/index.js`) for actions that can hit "message port closed" when the worker is cold.
+3. **Streaming**: Chat uses `chrome.runtime.connect()` and ReadableStreams; background uses `safePortPost` / `safePortDisconnect` to avoid disconnected-port errors.
+4. **Side panel**: Opens only in response to a user gesture (icon click, command, context menu, or popup button). Background must call `sidePanel.open()` synchronously in that gesture; do not `await` before `open()`.
+5. **Security**: API keys encrypted (AES-256-GCM), URL validation (SSRF), rate limiting, message action whitelist (`ALLOWED_ACTIONS`).
+
+## Sidebar Init & "Message Port Closed"
+
+The service worker can suspend quickly. If the sidebar sends several messages in a row (decrypt, models, page content), the port may close before a response ("The message port closed before a response was received"). The code mitigates this by:
+
+1. **Ping first**: Sidebar calls **ping** (via `pingSidebarWake()`), then waits ~250ms, then sends **getSidebarInit**. The worker wakes on ping and is still warm for init.
+2. **Fast getSidebarInit**: Background handler returns only **config** (storage + decrypt). It does **not** fetch models or page content there, so it can reply quickly.
+3. **Separate calls with retry**: After init, the sidebar gets page content via **getActiveTabPageContent** and models via **getModels**, both using **sendMessageWithRetry** (4 retries, 200×attempts ms delay).
+4. **Reply-once in background**: Async handlers use a single `reply(payload)` helper so `sendResponse` is only called once; duplicate or late responses can close the port.
+
+When adding new background actions used by the sidebar or on cold start, prefer minimal work before `sendResponse`, or use the same reply-once + retry pattern.
 
 ## Development Commands
 
 ### Prerequisites
+
 - Node.js 18+
 - Chrome/Chromium-based browser
 
@@ -68,53 +79,50 @@ User Action → content.js → background.js (Service Worker) → Open WebUI API
 | Command | Description |
 |---------|-------------|
 | `npm install` | Install dependencies |
-| `npm run dev` | Start Vite dev server (for testing outside extension) |
-| `npm run build` | Build production bundle to `extension/dist/` |
-| `npm run check` | Run Svelte type checking |
-| `npm test` | Run Vitest tests |
-| `npm run test:watch` | Watch mode for tests |
-| `npm run test:coverage` | Run tests with coverage report |
+| `npm run dev` | Vite dev server (testing outside extension) |
+| `npm run build` | Build main app + content script → `extension/dist/` |
+| `npm run check` | Svelte type checking |
+| `npm test` | Vitest tests |
+| `npm run test:watch` | Watch mode |
+| `npm run test:coverage` | Coverage report |
+
+After code changes: run `npm run build` and reload the extension in `chrome://extensions`.
 
 ## Common Tasks
 
-### Adding a New Feature
+### Adding a new feature
 
-1. **For UI changes**: Modify Svelte components in `extension/src/lib/components/`
-2. **For background logic**: Add functions in `background.js` or modules in `extension/src/lib/background/`
-3. **For API integration**: Update `extension/src/lib/apis/index.js`
-4. **After changes**: Rebuild with `npm run build` and reload extension in Chrome
+- **UI**: `extension/src/lib/components/SpotlightSearch.svelte`
+- **Background**: `background.js` (add to `ALLOWED_ACTIONS` if it’s a new message action)
+- **APIs**: `extension/src/lib/apis/index.js` (use `sendMessageWithRetry` for cold-start-safe calls)
 
-### Modifying Security Features
+### Modifying security
 
-- **Encryption**: `extension/src/lib/background/encryption.js` (AES-256-GCM)
-- **Rate Limiting**: `extension/src/lib/background/rateLimit.js` (sliding window)
-- **URL Validation**: `extension/src/lib/background/urlValidation.js` (SSRF protection)
-- **Content Security Policy**: Configured in `manifest.json`
+- **Encryption**: `background.js` (encryptApiKey / decryptApiKey)
+- **Rate limiting**: `background.js` (`checkRateLimit`)
+- **URL validation**: `background.js` (`isValidUrl`)
 
 ## Testing
 
-Tests use Vitest with Node environment:
-- Test files: `extension/src/**/*.test.{js,ts}`
-- Run: `npm test`
-- Coverage: `npm run test:coverage`
+- Vitest, Node env
+- Tests: `extension/src/**/*.test.{js,ts}`
+- `npm test` / `npm run test:coverage`
 
 ## Keyboard Shortcuts
 
-- `Ctrl+Shift+K` / `Cmd+Shift+K`: Open spotlight search
-- `Ctrl+Shift+L` / `Cmd+Shift+L`: Open Open WebUI sidebar (side panel)
-- `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`: Send selected text for AI response
+- **Ctrl+Shift+K** / **Cmd+Shift+K**: Open spotlight search
+- **Ctrl+Shift+L** / **Cmd+Shift+L**: Open sidebar (side panel)
+- **Ctrl+Shift+Enter** / **Cmd+Shift+Enter**: Send selected text for AI response
 
-## Context Menu Items
+## Context Menu
 
-- **Summarize Page**: Extract main content and get AI summary
-- **Explain This**: Get AI explanation for selected text
-- **Open sidebar**: Open the AI chat in Chrome’s side panel (page context is included on first message when available)
+- **Summarize Page**, **Explain This**, **Open search**, **Open sidebar**
 
 ## Build Output
 
-The Svelte app builds to `extension/dist/`:
-- `main.js` - Compiled JavaScript bundle
-- `style.css` - Compiled CSS styles
-- `vite.svg` - Asset file
+`extension/dist/` (git-ignored):
 
-This directory is git-ignored. Rebuild with `npm run build` after any source changes.
+- `main.js`, `sidebar.js`, `chunk.js`, `style.css`, `index.html`, `sidebar.html` (main + side panel)
+- `main-content.js` (IIFE for content script; loaded by manifest)
+
+Rebuild with `npm run build` after any source change.

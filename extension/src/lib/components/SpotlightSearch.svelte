@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent } from "../apis";
+  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent, getSidebarInit, pingSidebarWake, decryptApiKeyFromBackground, encryptApiKeyViaBackground } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
 
   type StoredConfig = { url?: string; key?: string; model?: string };
@@ -62,6 +62,8 @@
 
   let searchValue = "";
   let models = [];
+  /** Page content loaded once during sidebar init (avoids extra message round-trips). */
+  let sidebarPageContext = "";
   let responseContainer: HTMLElement | null = null;
   let userScrolledUp = false; // Track if user has manually scrolled up
 
@@ -152,28 +154,33 @@
     let systemContent = "You are a helpful assistant. Provide clear and concise responses. Use markdown formatting when appropriate.";
     const isFirstMessage = conversationHistory.length === 1;
     if (sidebarMode && isFirstMessage) {
-      try {
-        const pageResult = await getActiveTabPageContent();
-        if (pageResult?.data && pageResult.data.trim().length > 0) {
-          const maxPageChars = 12000;
-          const pageContext = pageResult.data.length > maxPageChars
-            ? pageResult.data.substring(0, maxPageChars) + "\n\n[Content truncated for length.]"
-            : pageResult.data;
-          systemContent = `You are a helpful AI assistant in the Open WebUI side panel. The user can have any conversation they want. Below is the extracted text from the web page they currently have open—use it as context when their questions relate to the page (e.g. summarizing, explaining, or tasks based on it). If they ask about something not in the content, answer from your general knowledge and say so when it's not from the page. When they do refer to the page, base your answer on what is actually there. Keep a clear, friendly tone and use markdown when it helps. You only respond in the panel; you cannot interact with the browser.
+      let pageContext = sidebarPageContext;
+      if (!pageContext || pageContext.trim().length === 0) {
+        try {
+          const pageResult = await getActiveTabPageContent();
+          if (pageResult?.data && pageResult.data.trim().length > 0) {
+            pageContext = pageResult.data;
+          } else if (pageResult?.error) {
+            console.debug("Extension: Sidebar page context unavailable:", pageResult.error);
+          }
+        } catch (e) {
+          console.debug("Extension: Could not get page context for sidebar:", e);
+        }
+      }
+      if (pageContext && pageContext.trim().length > 0) {
+        const maxPageChars = 12000;
+        const truncated = pageContext.length > maxPageChars
+          ? pageContext.substring(0, maxPageChars) + "\n\n[Content truncated for length.]"
+          : pageContext;
+        systemContent = `You are a helpful AI assistant in the Open WebUI side panel. The user can have any conversation they want. Below is the extracted text from the web page they currently have open—use it as context when their questions relate to the page (e.g. summarizing, explaining, or tasks based on it). If they ask about something not in the content, answer from your general knowledge and say so when it's not from the page. When they do refer to the page, base your answer on what is actually there. Keep a clear, friendly tone and use markdown when it helps. You only respond in the panel; you cannot interact with the browser.
 
 ---
 Page content:
 ---
-${pageContext}
+${truncated}
 ---
 End of page content.
 ---`;
-        } else if (pageResult?.error) {
-          console.debug("Extension: Sidebar page context unavailable:", pageResult.error);
-        }
-      } catch (e) {
-        // If page content cannot be fetched (e.g. chrome:// or protected), continue with default system prompt
-        console.debug("Extension: Could not get page context for sidebar:", e);
       }
     }
 
@@ -291,45 +298,35 @@ End of page content.
       return;
     }
 
-    if (!isChromeAPIAvailable()) {
+    const c = typeof globalThis !== "undefined" ? (globalThis as any).chrome : undefined;
+    if (!c?.storage?.local || !c?.runtime?.sendMessage) {
       console.debug("Extension: Chrome APIs not available - cannot save config");
       return;
     }
 
     try {
-      // Encrypt API key before storing
-      const encryptionResponse = await chrome.runtime.sendMessage({
-        action: "encryptApiKey",
-        apiKey: key.trim()
-      });
-      
+      const encryptionResponse = await encryptApiKeyViaBackground(key.trim());
       if (encryptionResponse.error) {
         console.error("Extension: Failed to encrypt API key:", encryptionResponse.error);
-        // Fallback: store unencrypted (shouldn't happen, but for safety)
-        chrome.storage.local.set({ 
-          url: url.trim(), 
-          key: key.trim(), 
-          model: model.trim() 
+        await c.storage.local.set({
+          url: url.trim(),
+          key: key.trim(),
+          model: model.trim()
         });
       } else {
-        // Store encrypted API key
-        chrome.storage.local.set({ 
-          url: url.trim(), 
-          key: encryptionResponse.encrypted, 
-          model: model.trim() 
-        }).then(() => {
-          console.log("Value is set (API key encrypted)");
+        await c.storage.local.set({
+          url: url.trim(),
+          key: encryptionResponse.encrypted,
+          model: model.trim()
         });
+        console.debug("Extension: Config saved (API key encrypted)");
       }
     } catch (error) {
-      const errorMsg = error?.message || String(error);
       if (isContextInvalidatedError(error)) {
-        // Expected when extension is reloaded - use debug level
         console.debug("Extension: Chrome APIs not available - extension may have been reloaded");
       } else {
-        console.log(error);
+        console.error("Extension: Error saving config:", error);
       }
-      // Security: Removed localStorage fallback - chrome.storage.local is more secure
     }
 
     showConfig = false;
@@ -426,30 +423,14 @@ End of page content.
         if (storedConfig.url) currentUrl = storedConfig.url;
         if (storedConfig.model) currentModel = storedConfig.model;
         
-        // Decrypt API key if it exists
+        // Decrypt API key if it exists (uses retry for port-closed errors)
         if (storedConfig.key) {
-          try {
-            const decryptionResponse = await chrome.runtime.sendMessage({
-              action: "decryptApiKey",
-              encryptedApiKey: storedConfig.key
-            });
-            
-            if (decryptionResponse.error) {
-              console.error("Extension: Failed to decrypt API key:", decryptionResponse.error);
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            } else {
-              currentKey = decryptionResponse.decrypted;
-            }
-          } catch (error) {
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes("Extension context invalidated") || 
-                errorMsg.includes("Cannot read properties of undefined")) {
-              console.warn("Extension: Chrome runtime API not available");
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            } else {
-              console.error("Extension: Error decrypting API key:", error);
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            }
+          const decryptionResponse = await decryptApiKeyFromBackground(storedConfig.key);
+          if (decryptionResponse?.error) {
+            console.debug("Extension: Decrypt unavailable, using stored key as-is:", decryptionResponse.error);
+            currentKey = storedConfig.key;
+          } else {
+            currentKey = decryptionResponse.decrypted ?? storedConfig.key;
           }
         }
       } catch (error) {
@@ -1775,81 +1756,91 @@ End of page content.
       }
     }
 
-    if (_storageCache) {
-      url = _storageCache.url ?? "";
-      model = _storageCache.model ?? "";
-      
-      // Decrypt API key if it exists
-      if (_storageCache.key) {
-        const runtime = (chromeApi ?? (typeof chrome !== 'undefined' ? chrome : null))?.runtime;
-        if (runtime?.sendMessage) {
+    // Sidebar: wake worker with ping, then fast getSidebarInit (config only), then page content + models with retry.
+    if (sidebarMode && canLoadConfig) {
+      await pingSidebarWake();
+      await new Promise((r) => setTimeout(r, 250));
+      const initResult = await getSidebarInit();
+      if (!initResult.error && (initResult.url != null || initResult.key != null || initResult.model != null)) {
+        url = initResult.url ?? "";
+        key = initResult.key ?? "";
+        model = initResult.model ?? "";
+        models = Array.isArray(initResult.models) ? initResult.models : [];
+        sidebarPageContext = typeof initResult.pageContent === "string" ? initResult.pageContent : "";
+        showConfig = !(url && key && model);
+        if (url && key) {
           try {
-            const decryptionResponse = await runtime.sendMessage({
-              action: "decryptApiKey",
-              encryptedApiKey: _storageCache.key
-            });
-            
-            if (decryptionResponse?.error) {
-              console.error("Extension: Failed to decrypt API key:", decryptionResponse.error);
+            const pageResult = await getActiveTabPageContent();
+            if (pageResult?.data && typeof pageResult.data === "string" && pageResult.data.trim()) {
+              sidebarPageContext = pageResult.data;
+            }
+          } catch (_) {}
+          try {
+            models = await getModels(key, url);
+          } catch (err) {
+            console.debug("Extension: Failed to load models (non-critical):", err);
+          }
+        }
+      } else {
+        if (_storageCache) {
+          url = _storageCache.url ?? "";
+          model = _storageCache.model ?? "";
+          if (_storageCache.key) {
+            try {
+              const decryptionResponse = await decryptApiKeyFromBackground(_storageCache.key);
+              key = decryptionResponse?.error ? _storageCache.key : (decryptionResponse.decrypted ?? _storageCache.key);
+            } catch (_) {
               key = _storageCache.key;
-            } else {
-              key = decryptionResponse.decrypted ?? _storageCache.key;
             }
-          } catch (error) {
-            if (isContextInvalidatedError(error)) {
-              console.debug("Extension: Chrome runtime API not available - using stored key as-is");
-            } else {
-              console.error("Extension: Error decrypting API key:", error);
+          } else {
+            key = "";
+          }
+          if (_storageCache.url && key && _storageCache.model) {
+            showConfig = false;
+            if (models.length === 0) {
+              try {
+                models = await getModels(key, _storageCache.url);
+              } catch (err) {
+                console.debug("Extension: Failed to load models (fallback):", err);
+              }
             }
-            key = _storageCache.key;
+          } else {
+            showConfig = true;
           }
         } else {
+          showConfig = true;
+        }
+      }
+    } else if (_storageCache) {
+      url = _storageCache.url ?? "";
+      model = _storageCache.model ?? "";
+      if (_storageCache.key) {
+        try {
+          const decryptionResponse = await decryptApiKeyFromBackground(_storageCache.key);
+          if (decryptionResponse?.error) {
+            key = _storageCache.key;
+          } else {
+            key = decryptionResponse.decrypted ?? _storageCache.key;
+          }
+        } catch (_) {
           key = _storageCache.key;
         }
       } else {
         key = "";
       }
-      
-      // ====================================================================
-      // ENHANCEMENT: Improved Configuration Loading
-      // ====================================================================
-      // Config screen is hidden if all required values exist, even if models
-      // API fails (e.g., due to CORS on other sites). This allows the extension
-      // to work on any website, not just the OpenWebUI instance. Models are
-      // loaded in the background as a non-blocking operation.
-      // ====================================================================
-      // If we have all required config, hide config screen
-      // (even if models API fails, we can still use the extension)
       if (_storageCache.url && key && _storageCache.model) {
         showConfig = false;
-        
-        // Try to load models in the background (non-blocking)
-        // Only load if models haven't been loaded yet (prevent duplicate loading)
         if (models.length === 0) {
           try {
             models = await getModels(key, _storageCache.url);
-            // Models loaded successfully, but config screen stays hidden
-          } catch (error) {
-            // CORS errors are expected when loading models from other sites - this is non-critical
-            // Rate limit errors are also non-critical for background loading
-            // Extension context invalidated errors happen when extension is reloaded - ignore them
-            const errorMsg = error?.message || String(error);
-            if (!errorMsg.includes("CORS") && 
-                !errorMsg.includes("Failed to fetch") && 
-                !errorMsg.includes("Rate limit exceeded") &&
-                !errorMsg.includes("Extension context invalidated")) {
-              console.log("Failed to load models (non-critical):", error);
-            }
-            // Models failed to load, but we still have config - keep config screen hidden
-            // User can still use the extension with the stored model
+          } catch (err) {
+            console.debug("Extension: Failed to load models (non-critical):", err);
           }
         }
       } else {
-        // Missing required config - show config screen
         showConfig = true;
       }
     } else {
-      // No config found - show config screen
       showConfig = true;
     }
     })();

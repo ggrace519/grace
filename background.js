@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -507,8 +507,56 @@ async function handleExtractPageContent(tabId) {
 
 // Key for storing which tab's context the side panel should use (session only)
 const SIDE_PANEL_CONTEXT_TAB_KEY = "sidePanelContextTabId";
+// In-memory so getActiveTabPageContent can read it without awaiting storage (avoids message port timeout)
+let sidePanelContextTabIdMemory = null;
 
-function runToggleSearchForTab(tab) {
+/** Returns the tab id the side panel should use for context (memory, session, or current tab). */
+async function getContextTabId() {
+  const tryUseTabId = async (id) => {
+    if (id == null) return null;
+    try {
+      const tab = await chrome.tabs.get(id);
+      if (tab && tab.id && tab.url) {
+        const u = tab.url;
+        if (!u.startsWith("chrome://") && !u.startsWith("chrome-extension://") && !u.startsWith("edge://") && !u.startsWith("about:")) {
+          return tab.id;
+        }
+      }
+    } catch (_) {}
+    return null;
+  };
+  let tabId = await tryUseTabId(sidePanelContextTabIdMemory);
+  if (tabId != null) return tabId;
+  const stored = await chrome.storage.session.get(SIDE_PANEL_CONTEXT_TAB_KEY).catch(() => ({}));
+  tabId = await tryUseTabId(stored[SIDE_PANEL_CONTEXT_TAB_KEY]);
+  if (tabId != null) return tabId;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tabs && tabs[0] && tabs[0].id) return tabs[0].id;
+  const fallback = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return (fallback && fallback[0] && fallback[0].id) ? fallback[0].id : null;
+}
+
+/** Get page content for a given tab (content script first, then executeScript). */
+async function getPageContentForTabId(tabId) {
+  if (!tabId) return { error: "No tab" };
+  try {
+    const contentScriptResponse = await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, { action: "getPageContent" }, (response) => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve(response);
+      });
+    });
+    if (contentScriptResponse && (contentScriptResponse.data !== undefined || contentScriptResponse.error)) {
+      const data = contentScriptResponse.data ?? "";
+      const trimmed = typeof data === "string" ? data.trim() : "";
+      if (trimmed.length >= 50) return { data: contentScriptResponse.data };
+      if (contentScriptResponse.error) return { error: contentScriptResponse.error };
+    }
+  } catch (_) {}
+  return await handleExtractPageContent(tabId);
+}
+
+function runToggleSearchForTab(tab, focusTab = false) {
   if (!tab || !tab.id) return;
   const url = tab.url || "";
   if (url.startsWith("chrome://") ||
@@ -518,19 +566,29 @@ function runToggleSearchForTab(tab) {
       url.startsWith("about:")) {
     return;
   }
-  chrome.tabs.sendMessage(tab.id, { action: "toggleSearch" }).catch(() => {
-    chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      func: () => {
-        window.dispatchEvent(new CustomEvent("open-webui-toggle-search", { bubbles: true }));
-        if (window.openWebUIToggleSearch && typeof window.openWebUIToggleSearch === "function") {
-          try {
-            window.openWebUIToggleSearch();
-          } catch (e) {}
+  const tabId = tab.id;
+  const doSend = () => {
+    chrome.tabs.sendMessage(tabId, { action: "toggleSearch" }).catch(() => {
+      chrome.scripting.executeScript({
+        target: { tabId: tabId, allFrames: false },
+        func: () => {
+          window.dispatchEvent(new CustomEvent("open-webui-toggle-search", { bubbles: true }));
+          if (window.openWebUIToggleSearch && typeof window.openWebUIToggleSearch === "function") {
+            try {
+              window.openWebUIToggleSearch();
+            } catch (e) {}
+          }
         }
-      }
-    }).catch(() => {});
-  });
+      }).catch(() => {});
+    });
+  };
+  if (focusTab && tab.windowId) {
+    chrome.tabs.update(tabId, { active: true }).then(() => {
+      return chrome.windows.update(tab.windowId, { focused: true });
+    }).then(doSend).catch(doSend);
+  } else {
+    doSend();
+  }
 }
 
 // ============================================================================
@@ -579,22 +637,21 @@ chrome.commands.onCommand.addListener(function (command) {
       }
     });
   } else if (command === "open-sidebar") {
-    // Resolve active tab, store for side panel context, then open panel
+    // Open immediately (user gesture); set context tab after.
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT });
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs || !tabs[0]) {
-        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
-          const tabId = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0].id : null;
-          if (tabId != null) {
-            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
-          }
-          chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
-            console.error("Error opening side panel:", err);
-          });
-        });
+      const tab = (tabs && tabs[0]) ? tabs[0] : null;
+      const tabId = tab ? tab.id : null;
+      if (tabId != null) {
+        sidePanelContextTabIdMemory = tabId;
+        chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
       } else {
-        chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabs[0].id }).catch(() => {});
-        chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
-          console.error("Error opening side panel:", err);
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (ft) => {
+          const id = (ft && ft[0]) ? ft[0].id : null;
+          if (id != null) {
+            sidePanelContextTabIdMemory = id;
+            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: id }).catch(() => {});
+          }
         });
       }
     });
@@ -708,15 +765,16 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 // ============================================================================
-// ENHANCEMENT: Extension Icon Click Handler
+// ENHANCEMENT: Extension Icon Click Handler (only when no popup)
 // ============================================================================
-// Open side panel when clicking the extension toolbar icon; store tab for context
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.action.onClicked.addListener((tab) => {
   try {
+    // Must open synchronously in this handler (user gesture); storage can run after.
+    chrome.sidePanel.open({ tabId: tab.id });
     if (tab && tab.id != null) {
-      await chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id });
+      sidePanelContextTabIdMemory = tab.id;
+      chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
     }
-    await chrome.sidePanel.open({ tabId: tab.id });
   } catch (error) {
     console.error("Error opening side panel:", error);
   }
@@ -864,12 +922,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       });
     });
   } else if (info.menuItemId === 'open-sidebar') {
+    // Open immediately (user gesture); set context tab after.
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT });
     if (tab && tab.id != null) {
+      sidePanelContextTabIdMemory = tab.id;
       chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
     }
-    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
-      console.error("Error opening side panel:", err);
-    });
   }
 });
 
@@ -885,8 +943,14 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
   }
 
   // Validate sender - allow certain actions without tab validation
-  const actionsWithoutTab = ['fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup'];
+  const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup'];
   const needsTab = !actionsWithoutTab.includes(request.action);
+
+  // Ping: wake service worker; reply immediately so sidebar can then send getSidebarInit while worker is warm.
+  if (request.action === "ping") {
+    sendResponse({ pong: true });
+    return false;
+  }
 
   // For actions that need a tab, try to get it from the message or query active tab
   let id = sender?.tab?.id;
@@ -976,45 +1040,40 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     sendResponse({});
   } else if (request.action == "fetchModels") {
     (async () => {
-      // Validate URL
-      if (!isValidUrl(request.url)) {
-        sendResponse({ error: "Invalid URL format" });
-        return;
-      }
-
-      // Validate API key format
-      if (request.key && typeof request.key !== 'string') {
-        sendResponse({ error: "Invalid API key format" });
-        return;
-      }
-
-      // Decrypt API key if provided
-      let decryptedKey = request.key;
-      if (request.key) {
-        try {
-          decryptedKey = await decryptApiKey(request.key);
-        } catch (error) {
-          console.error("Extension: Failed to decrypt API key for models request:", error);
-          decryptedKey = request.key;
-        }
-      }
-
-      // Rate Limiting
-      const rateLimitCheck = await checkRateLimit('fetchModels');
-      if (!rateLimitCheck.allowed) {
-        sendResponse({
-          error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before fetching models again.`
-        });
-        return;
-      }
-
-      const apiUrl = `${request.url}/api/models`;
-      if (!isValidUrl(apiUrl)) {
-        sendResponse({ error: "Invalid API URL" });
-        return;
-      }
-
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
       try {
+        if (!isValidUrl(request.url)) {
+          reply({ error: "Invalid URL format" });
+          return;
+        }
+        if (request.key && typeof request.key !== "string") {
+          reply({ error: "Invalid API key format" });
+          return;
+        }
+        let decryptedKey = request.key;
+        if (request.key) {
+          try {
+            decryptedKey = await decryptApiKey(request.key);
+          } catch (error) {
+            console.error("Extension: Failed to decrypt API key for models request:", error);
+            decryptedKey = request.key;
+          }
+        }
+        const rateLimitCheck = await checkRateLimit("fetchModels");
+        if (!rateLimitCheck.allowed) {
+          reply({ error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before fetching models again.` });
+          return;
+        }
+        const apiUrl = `${request.url}/api/models`;
+        if (!isValidUrl(apiUrl)) {
+          reply({ error: "Invalid API URL" });
+          return;
+        }
         const res = await safeFetch(apiUrl, {
           method: "GET",
           headers: {
@@ -1023,42 +1082,48 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
             ...(decryptedKey && { authorization: `Bearer ${decryptedKey}` }),
           },
         });
-
         validateCSPHeaders(res);
-
         if (!res.ok) {
           const error = await res.json();
-          const friendlyError = getUserFriendlyErrorMessage(error);
-          sendResponse({ error: friendlyError });
+          reply({ error: getUserFriendlyErrorMessage(error) });
           return;
         }
         const data = await res.json();
-        sendResponse({ data: data });
+        reply({ data: data });
       } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+        reply({ error: getUserFriendlyErrorMessage(error) });
       }
     })();
     return true;
   } else if (request.action == "encryptApiKey") {
     (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
       try {
         const encrypted = await encryptApiKey(request.apiKey);
-        sendResponse({ encrypted: encrypted });
+        reply({ encrypted: encrypted });
       } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+        reply({ error: getUserFriendlyErrorMessage(error) });
       }
     })();
     return true;
   } else if (request.action == "decryptApiKey") {
     (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
       try {
         const decrypted = await decryptApiKey(request.encryptedApiKey);
-        sendResponse({ decrypted: decrypted });
+        reply({ decrypted: decrypted });
       } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+        reply({ error: getUserFriendlyErrorMessage(error) });
       }
     })();
     return true;
@@ -1074,79 +1139,64 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     })();
     return true;
   } else if (request.action == "getActiveTabPageContent") {
-    // Used by the sidebar to get the current tab's page content. Prefer the tab that opened the panel (stored in session).
     (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
       try {
-        let tabId = null;
-        let url = "";
-
-        const stored = await chrome.storage.session.get(SIDE_PANEL_CONTEXT_TAB_KEY).catch(() => ({}));
-        const storedTabId = stored[SIDE_PANEL_CONTEXT_TAB_KEY];
-
-        if (storedTabId != null) {
-          try {
-            const tab = await chrome.tabs.get(storedTabId);
-            if (tab && tab.id && tab.url) {
-              const u = tab.url;
-              if (!u.startsWith("chrome://") && !u.startsWith("chrome-extension://") && !u.startsWith("edge://") && !u.startsWith("about:")) {
-                tabId = tab.id;
-                url = u;
-              }
-            }
-          } catch (_) {
-            // Tab no longer exists or invalid; fall through to query
-          }
-        }
-
-        if (tabId == null) {
-          let tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (!tabs || !tabs[0]) {
-            tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-          }
-          if (!tabs || !tabs[0]) {
-            sendResponse({ error: "No active tab" });
-            return;
-          }
-          tabId = tabs[0].id;
-          url = tabs[0].url || "";
-        }
-
-        if (url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:")) {
-          sendResponse({ error: "Cannot access this page" });
+        const tabId = await getContextTabId();
+        if (!tabId) {
+          reply({ error: "No active tab" });
           return;
         }
-
-        // Try content script first (Rovo pattern); fallback to executeScript
-        try {
-          const contentScriptResponse = await new Promise((resolve, reject) => {
-            chrome.tabs.sendMessage(tabId, { action: "getPageContent" }, (response) => {
-              if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-              } else {
-                resolve(response);
-              }
-            });
-          });
-          if (contentScriptResponse && (contentScriptResponse.data !== undefined || contentScriptResponse.error)) {
-            const data = contentScriptResponse.data ?? "";
-            const trimmed = typeof data === "string" ? data.trim() : "";
-            if (trimmed.length >= 50) {
-              sendResponse({ data: data });
-              return;
-            }
-            if (contentScriptResponse.error) {
-              sendResponse({ error: contentScriptResponse.error });
-              return;
-            }
-          }
-        } catch (_) {
-          // Content script not available or didn't respond; fall back to executeScript
+        const tab = await chrome.tabs.get(tabId);
+        const url = tab && tab.url ? tab.url : "";
+        if (url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:")) {
+          reply({ error: "Cannot access this page" });
+          return;
         }
-        const result = await handleExtractPageContent(tabId);
-        sendResponse(result);
+        const result = await getPageContentForTabId(tabId);
+        reply(result.data !== undefined ? { data: result.data } : { error: result.error || "No content" });
       } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+        reply({ error: getUserFriendlyErrorMessage(error) });
+      }
+    })();
+    return true;
+  } else if (request.action == "getSidebarInit") {
+    // Config + decrypt only (no tab/page content). Reply as fast as possible to avoid "message port closed".
+    // Sidebar then gets page content and models in separate messages (with retry).
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      try {
+        const config = await chrome.storage.local.get(["url", "key", "model"]);
+        const storedUrl = config.url || "";
+        const storedKey = config.key || "";
+        const storedModel = config.model || "";
+        let decryptedKey = storedKey;
+        if (storedKey) {
+          try {
+            decryptedKey = await decryptApiKey(storedKey);
+          } catch (_) {
+            decryptedKey = storedKey;
+          }
+        }
+        reply({
+          url: storedUrl,
+          key: decryptedKey,
+          model: storedModel,
+          models: [],
+          pageContent: "",
+        });
+      } catch (error) {
+        reply({ error: getUserFriendlyErrorMessage(error) });
       }
     })();
     return true;
@@ -1205,42 +1255,44 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     })();
     return true;
   } else if (request.action == "openSidePanel") {
-    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(() => {
-      sendResponse({ success: true });
-    }).catch((err) => {
-      sendResponse({ error: err.message });
-    });
+    // Note: open() may only be called in response to a user gesture; when invoked via message the gesture is often lost.
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT })
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ error: err && err.message ? err.message : "User gesture required" }));
     return true;
   } else if (request.action == "openSearchFromPopup") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs || !tabs[0]) {
-        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
-          const t = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0] : null;
-          if (t) runToggleSearchForTab(t);
-          sendResponse(t ? {} : { error: "No active tab" });
-        });
-      } else {
-        runToggleSearchForTab(tabs[0]);
+      const t = (tabs && tabs[0]) ? tabs[0] : null;
+      if (t) {
+        runToggleSearchForTab(t, true);
         sendResponse({});
+      } else {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
+          const ft = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0] : null;
+          if (ft) runToggleSearchForTab(ft, true);
+          sendResponse(ft ? {} : { error: "No active tab" });
+        });
       }
     });
     return true;
   } else if (request.action == "openSidebarFromPopup") {
+    // Popup opens the panel itself (user gesture); we only set context tab here.
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs || !tabs[0]) {
-        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
-          const t = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0] : null;
-          if (t && t.id != null) {
-            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: t.id }).catch(() => {});
-          }
-          chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(() => sendResponse({ success: true })).catch((err) => sendResponse({ error: err.message }));
-        });
+      const t = (tabs && tabs[0]) ? tabs[0] : null;
+      const tabId = t && t.id != null ? t.id : null;
+      if (tabId != null) {
+        sidePanelContextTabIdMemory = tabId;
+        chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
       } else {
-        if (tabs[0].id != null) {
-          chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabs[0].id }).catch(() => {});
-        }
-        chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(() => sendResponse({ success: true })).catch((err) => sendResponse({ error: err.message }));
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (ft) => {
+          const id = (ft && ft[0]) ? ft[0].id : null;
+          if (id != null) {
+            sidePanelContextTabIdMemory = id;
+            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: id }).catch(() => {});
+          }
+        });
       }
+      sendResponse({ success: true });
     });
     return true;
   } else {
@@ -1253,21 +1305,41 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
 // ============================================================================
 // ENHANCEMENT: Streaming Chat Completions via Ports
 // ============================================================================
+function safePortPost(port, message) {
+  try {
+    port.postMessage(message);
+  } catch (e) {
+    if (e?.message && !e.message.includes("disconnected")) {
+      console.error("Extension: port.postMessage error", e);
+    }
+  }
+}
+
+function safePortDisconnect(port) {
+  try {
+    port.disconnect();
+  } catch (e) {
+    if (e?.message && !e.message.includes("disconnected")) {
+      console.error("Extension: port.disconnect error", e);
+    }
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "chat-stream") {
     port.onMessage.addListener(async (msg) => {
       if (msg.action === "fetchChatCompletion") {
         // Validate URL
         if (!isValidUrl(msg.url)) {
-          port.postMessage({ error: "Invalid URL format" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid URL format" });
+          safePortDisconnect(port);
           return;
         }
 
         // Validate API key format
         if (!msg.api_key || typeof msg.api_key !== 'string') {
-          port.postMessage({ error: "Invalid API key format" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid API key format" });
+          safePortDisconnect(port);
           return;
         }
 
@@ -1281,25 +1353,25 @@ chrome.runtime.onConnect.addListener((port) => {
 
         // Validate request body
         if (!msg.body || typeof msg.body !== 'object') {
-          port.postMessage({ error: "Invalid request body" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid request body" });
+          safePortDisconnect(port);
           return;
         }
 
         // Rate Limiting
         const rateLimitCheck = await checkRateLimit('chatCompletion');
         if (!rateLimitCheck.allowed) {
-          port.postMessage({
+          safePortPost(port, {
             error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before making another request.`
           });
-          port.disconnect();
+          safePortDisconnect(port);
           return;
         }
 
         const apiUrl = `${msg.url}/chat/completions`;
         if (!isValidUrl(apiUrl)) {
-          port.postMessage({ error: "Invalid API URL" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid API URL" });
+          safePortDisconnect(port);
           return;
         }
 
@@ -1317,8 +1389,8 @@ chrome.runtime.onConnect.addListener((port) => {
             if (!res.ok) {
               const errorText = await res.text();
               const friendlyError = getUserFriendlyErrorMessage({ message: `HTTP ${res.status}: ${errorText}` });
-              port.postMessage({ error: friendlyError });
-              port.disconnect();
+              safePortPost(port, { error: friendlyError });
+              safePortDisconnect(port);
               return;
             }
 
@@ -1329,18 +1401,18 @@ chrome.runtime.onConnect.addListener((port) => {
               try {
                 const { done, value } = await reader.read();
                 if (done) {
-                  port.postMessage({ done: true });
-                  port.disconnect();
+                  safePortPost(port, { done: true });
+                  safePortDisconnect(port);
                   return;
                 }
 
                 const chunk = decoder.decode(value, { stream: true });
-                port.postMessage({ chunk: chunk, done: false });
+                safePortPost(port, { chunk: chunk, done: false });
                 readChunk();
               } catch (error) {
                 const friendlyError = getUserFriendlyErrorMessage(error);
-                port.postMessage({ error: friendlyError, done: true });
-                port.disconnect();
+                safePortPost(port, { error: friendlyError, done: true });
+                safePortDisconnect(port);
               }
             };
 
@@ -1348,8 +1420,8 @@ chrome.runtime.onConnect.addListener((port) => {
           })
           .catch((error) => {
             const friendlyError = getUserFriendlyErrorMessage(error);
-            port.postMessage({ error: friendlyError });
-            port.disconnect();
+            safePortPost(port, { error: friendlyError });
+            safePortDisconnect(port);
           });
       }
     });

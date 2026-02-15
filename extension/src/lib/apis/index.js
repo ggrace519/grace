@@ -1,8 +1,9 @@
-// Use globalThis so Chrome API is found in extension pages (e.g. side panel) where
-// the global "chrome" may not be in scope for the module.
+// Use multiple globals so Chrome API is found in content scripts and extension pages.
 const getChrome = () => {
   try {
-    if (typeof globalThis !== 'undefined' && globalThis.chrome) return globalThis.chrome;
+    if (typeof globalThis !== "undefined" && globalThis.chrome) return globalThis.chrome;
+    if (typeof self !== "undefined" && self.chrome) return self.chrome;
+    if (typeof window !== "undefined" && window.chrome) return window.chrome;
     return undefined;
   } catch {
     return undefined;
@@ -99,58 +100,140 @@ export function withErrorHandling(apiCall) {
   };
 }
 
+const isMessagePortClosedError = (err) => {
+  const msg = err?.message || String(err);
+  return msg.includes("message port closed") || msg.includes("Message port closed");
+};
+
+// Send message to background with retries (handles service worker wake-up / port timeout).
+function sendMessageWithRetry(message, maxRetries = 4) {
+  const c = getChrome();
+  if (!c?.runtime?.sendMessage) {
+    return Promise.reject(new Error("Extension context invalidated - Chrome APIs not available"));
+  }
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    const send = () => {
+      c.runtime.sendMessage(message, (response) => {
+        const lastError = c.runtime?.lastError;
+        if (lastError) {
+          const msg = lastError.message || "";
+          if (isMessagePortClosedError(msg) && attempts < maxRetries) {
+            attempts += 1;
+            setTimeout(send, 200 * attempts);
+            return;
+          }
+          reject(new Error(msg));
+          return;
+        }
+        resolve(response);
+      });
+    };
+    send();
+  });
+}
+
+/** Wake the service worker so a follow-up message is less likely to hit "message port closed". */
+export const pingSidebarWake = () => {
+  const c = getChrome();
+  if (!c?.runtime?.sendMessage) return Promise.resolve();
+  return sendMessageWithRetry({ action: "ping" }, 2).catch(() => {});
+};
+
 export const getModels = async (key, url) => {
   const c = getChrome();
   if (!c?.runtime?.sendMessage) {
     return Promise.reject(new Error("Extension context invalidated - Chrome APIs not available"));
   }
 
-  // Proxy through background script to avoid CORS
-  return new Promise((resolve, reject) => {
-    c.runtime.sendMessage(
-      {
-        action: "fetchModels",
-        url: url,
-        key: key,
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          const errorMessage = chrome.runtime.lastError.message;
-          reject(new Error(errorMessage));
-          return;
-        }
-        if (response.error) {
-          reject(new Error(response.error));
-          return;
-        }
-
-        let models = response.data?.data ?? [];
-        models = models
-          .filter((models) => models)
-          .sort((a, b) => {
-            // Compare case-insensitively
-            const lowerA = a.name.toLowerCase();
-            const lowerB = b.name.toLowerCase();
-
-            if (lowerA < lowerB) return -1;
-            if (lowerA > lowerB) return 1;
-
-            // If same case-insensitively, sort by original strings,
-            // lowercase will come before uppercase due to ASCII values
-            if (a < b) return -1;
-            if (a > b) return 1;
-
-            return 0; // They are equal
-          });
-
-        // Log model count instead of full array to reduce console noise
-        if (models.length > 0) {
-          console.debug(`Extension: Loaded ${models.length} model(s)`);
-        }
-        resolve(models);
-      }
-    );
+  const response = await sendMessageWithRetry({
+    action: "fetchModels",
+    url: url,
+    key: key,
   });
+
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+
+  let models = response?.data?.data ?? [];
+  models = models
+    .filter((m) => m)
+    .sort((a, b) => {
+      const lowerA = a.name.toLowerCase();
+      const lowerB = b.name.toLowerCase();
+      if (lowerA < lowerB) return -1;
+      if (lowerA > lowerB) return 1;
+      if (a < b) return -1;
+      if (a > b) return 1;
+      return 0;
+    });
+
+  if (models.length > 0) {
+    console.debug(`Extension: Loaded ${models.length} model(s)`);
+  }
+  return models;
+};
+
+/**
+ * Decrypt API key via background (with retry on port closed).
+ * @param {string} encryptedApiKey
+ * @returns {Promise<{ decrypted?: string, error?: string }>}
+ */
+export const decryptApiKeyFromBackground = async (encryptedApiKey) => {
+  try {
+    const response = await sendMessageWithRetry({
+      action: "decryptApiKey",
+      encryptedApiKey: encryptedApiKey,
+    });
+    return response || {};
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+};
+
+/**
+ * Encrypt API key via background (with retry on port closed). Use when saving config.
+ * @param {string} apiKey
+ * @returns {Promise<{ encrypted?: string, error?: string }>}
+ */
+export const encryptApiKeyViaBackground = async (apiKey) => {
+  try {
+    const response = await sendMessageWithRetry({
+      action: "encryptApiKey",
+      apiKey: apiKey,
+    });
+    return response || {};
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+};
+
+/**
+ * Single round-trip for sidebar init: config (decrypted key), models, and page content.
+ * Use in sidebar onMount to avoid multiple message round-trips and "message port closed" errors.
+ * @returns {Promise<{ url?: string, key?: string, model?: string, models?: Array, pageContent?: string, error?: string }>}
+ */
+export const getSidebarInit = async () => {
+  try {
+    const c = getChrome();
+    if (!c?.runtime?.sendMessage) {
+      return { error: "Chrome APIs not available" };
+    }
+    const response = await sendMessageWithRetry({ action: "getSidebarInit" });
+    if (response?.error) {
+      return { error: response.error };
+    }
+    return {
+      url: response.url ?? "",
+      key: response.key ?? "",
+      model: response.model ?? "",
+      models: Array.isArray(response.models) ? response.models : [],
+      pageContent: typeof response.pageContent === "string" ? response.pageContent : "",
+    };
+  } catch (e) {
+    return { error: (e?.message && String(e.message)) || "Failed to load" };
+  }
 };
 
 /**
@@ -160,29 +243,20 @@ export const getModels = async (key, url) => {
  * even if isChromeAPIAvailable() is false due to timing or environment.
  * @returns {Promise<{ data?: string, error?: string }>}
  */
-export const getActiveTabPageContent = () => {
-  return new Promise((resolve) => {
-    try {
-      const c = getChrome();
-      if (!c?.runtime?.sendMessage) {
-        resolve({ error: "Chrome APIs not available" });
-        return;
-      }
-      c.runtime.sendMessage({ action: "getActiveTabPageContent" }, (response) => {
-        if (c.runtime?.lastError) {
-          resolve({ error: c.runtime.lastError.message });
-          return;
-        }
-        if (response?.error) {
-          resolve({ error: response.error });
-          return;
-        }
-        resolve({ data: response?.data ?? "" });
-      });
-    } catch (e) {
-      resolve({ error: (e?.message && String(e.message)) || "Chrome APIs not available" });
+export const getActiveTabPageContent = async () => {
+  try {
+    const c = getChrome();
+    if (!c?.runtime?.sendMessage) {
+      return { error: "Chrome APIs not available" };
     }
-  });
+    const response = await sendMessageWithRetry({ action: "getActiveTabPageContent" });
+    if (response?.error) {
+      return { error: response.error };
+    }
+    return { data: response?.data ?? "" };
+  } catch (e) {
+    return { error: (e?.message && String(e.message)) || "Chrome APIs not available" };
+  }
 };
 
 export const generateOpenAIChatCompletion = async (

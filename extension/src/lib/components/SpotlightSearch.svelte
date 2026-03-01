@@ -362,7 +362,7 @@
 
     show = !show;
 
-    setTimeout(() => {
+    scheduleTimer(() => {
       const inputElement = document.getElementById(
         "open-webui-search-input"
       );
@@ -387,7 +387,7 @@
       errorMessage = "No content could be extracted from this page.";
       showError = true;
       showResponse = true;
-      setTimeout(() => {
+      scheduleTimer(() => {
         showError = false;
         errorMessage = "";
       }, 5000);
@@ -522,7 +522,7 @@
                     processStreamingContent(content);
                     
                     // Smart auto-scroll (only if user is near bottom)
-                    setTimeout(() => {
+                    scheduleTimer(() => {
                       smartScrollToBottom(responseContainer);
                     }, 0);
                   }
@@ -564,7 +564,7 @@
           isThinking = false;
           
           // Focus the follow-up input after response completes
-          setTimeout(() => {
+          scheduleTimer(() => {
             const inputElement = document.getElementById("open-webui-followup-input");
             if (inputElement) {
               inputElement.focus();
@@ -580,7 +580,7 @@
         isStreaming = false;
         errorMessage = "Failed to get summary. Please check your configuration.";
         showError = true;
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -602,7 +602,7 @@
         errorMessage = errorMsg;
         showError = true;
         showResponse = true;
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -610,7 +610,7 @@
         errorMessage = `Error: ${errorMsg}`;
         showError = true;
         showResponse = true;
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -634,7 +634,7 @@
       errorMessage = "No text was selected. Please select some text and try again.";
       showError = true;
       showResponse = true;
-      setTimeout(() => {
+      scheduleTimer(() => {
         showError = false;
         errorMessage = "";
       }, 5000);
@@ -770,7 +770,7 @@
                     processStreamingContent(content);
                     
                     // Smart auto-scroll (only if user is near bottom)
-                    setTimeout(() => {
+                    scheduleTimer(() => {
                       smartScrollToBottom(responseContainer);
                     }, 0);
                   }
@@ -812,7 +812,7 @@
           isThinking = false;
           
           // Focus the follow-up input after response completes
-          setTimeout(() => {
+          scheduleTimer(() => {
             const inputElement = document.getElementById("open-webui-followup-input");
             if (inputElement) {
               inputElement.focus();
@@ -828,7 +828,7 @@
         isStreaming = false;
         errorMessage = "Failed to get explanation. Please check your configuration.";
         showError = true;
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -849,7 +849,7 @@
         errorMessage = errorMsg;
         showError = true;
         showResponse = true;
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -857,7 +857,7 @@
         errorMessage = `Error: ${errorMsg}`;
         showError = true;
         showResponse = true;
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -1115,7 +1115,7 @@
                     processStreamingContent(content);
                     
                     // Smart auto-scroll (only if user is near bottom)
-                    setTimeout(() => {
+                    scheduleTimer(() => {
                       smartScrollToBottom(responseContainer);
                     }, 0);
                   }
@@ -1148,7 +1148,7 @@
           responseText = "";
           
           // Focus the follow-up input after response completes
-          setTimeout(() => {
+          scheduleTimer(() => {
             const inputElement = document.getElementById("open-webui-followup-input");
             if (inputElement) {
               inputElement.focus();
@@ -1173,7 +1173,7 @@
         errorMessage = errorMsg;
         showError = true;
         // Auto-hide error after 5 seconds
-        setTimeout(() => {
+        scheduleTimer(() => {
           showError = false;
           errorMessage = "";
         }, 5000);
@@ -1588,7 +1588,7 @@
                           processStreamingContent(content);
                           
                           // Smart auto-scroll (only if user is near bottom)
-                          setTimeout(() => {
+                          scheduleTimer(() => {
                             smartScrollToBottom(responseContainer);
                           }, 0);
                           
@@ -1639,7 +1639,7 @@
                 responseText = "";
                 
                 // Focus the follow-up input after response completes
-                setTimeout(() => {
+                scheduleTimer(() => {
                   const inputElement = document.getElementById("open-webui-followup-input");
                   if (inputElement) {
                     inputElement.focus();
@@ -1678,7 +1678,7 @@
             showError = true;
             showResponse = true; // Keep popup open to show error
             // Auto-hide error after 5 seconds
-            setTimeout(() => {
+            scheduleTimer(() => {
               showError = false;
               errorMessage = "";
             }, 5000);

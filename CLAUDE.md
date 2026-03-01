@@ -50,7 +50,7 @@ if (window !== window.top) return; // content.js, main.ts, SpotlightSearch.svelt
 **Duplicate Initialization Prevention**: `main.ts` uses a global flag `__openwebui_extension_initialized` to prevent re-mounting on extension reload.
 
 **Message Action Whitelist**: `background.js` validates all incoming messages against `ALLOWED_ACTIONS`:
-`getConfig`, `saveConfig`, `getModels`, `chatCompletion`, `extractPageContent`, `explainText`, `summarizePage`, `continueInOpenWebUI`
+`getSelection`, `writeText`, `fetchModels`, `toggleSearch`, `encryptApiKey`, `decryptApiKey`, `createChat`, `extractPageContent`, `summarizePage`, `explainText`, `openSidePanel`
 
 **CSS Isolation**: Extension UI is scoped under `#extension-app` with `!important` rules in `app.css` to prevent host-page CSS interference.
 

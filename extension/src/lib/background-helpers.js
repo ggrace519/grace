@@ -3,6 +3,37 @@
  * Logic is shared with background.js (keep in sync). Used for unit testing.
  */
 
+// Keep in sync with urlValidation.js isBlockedHost
+const SSRF_BLOCKED_HOSTS = [
+  '169.254.169.254',
+  'metadata.google.internal',
+  'metadata.google.com',
+  'metadata',
+];
+
+function isBlockedHost(host) {
+  if (!host || typeof host !== 'string') return true;
+  // Strip IPv6 brackets (url.hostname behaviour varies across runtimes)
+  const normalized = host.toLowerCase().trim().replace(/^\[|\]$/g, '');
+  if (SSRF_BLOCKED_HOSTS.some((blocked) => normalized === blocked.toLowerCase())) return true;
+  if (normalized === '0.0.0.0') return true;
+  if (normalized.startsWith('127.')) return true;
+  if (normalized.startsWith('10.')) return true;
+  if (normalized.startsWith('192.168.')) return true;
+  if (normalized.startsWith('169.254.')) return true;
+  if (normalized.startsWith('172.')) {
+    const second = parseInt(normalized.split('.')[1], 10);
+    if (second >= 16 && second <= 31) return true;
+  }
+  const isIPv6 = normalized.includes(':');
+  if (isIPv6) {
+    if (normalized === '::1') return true;
+    if (normalized === '::') return true;
+    if (/^f[cd]/.test(normalized)) return true;
+  }
+  return false;
+}
+
 export function isValidUrl(urlString) {
   if (!urlString || typeof urlString !== 'string') return false;
   try {
@@ -20,6 +51,7 @@ export function getValidatedFetchUrl(urlString) {
   try {
     const url = new URL(urlString);
     if (!['http:', 'https:'].includes(url.protocol)) return null;
+    if (isBlockedHost(url.hostname)) return null;
     return url.origin + url.pathname + url.search;
   } catch {
     return null;

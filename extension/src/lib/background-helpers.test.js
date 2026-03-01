@@ -50,6 +50,40 @@ describe('background-helpers', () => {
       expect(getValidatedFetchUrl('javascript:void(0)')).toBe(null);
       expect(getValidatedFetchUrl('invalid')).toBe(null);
     });
+
+    it('blocks IPv4 loopback and unspecified (SSRF)', () => {
+      expect(getValidatedFetchUrl('http://127.0.0.1/api')).toBe(null);
+      expect(getValidatedFetchUrl('http://127.1.2.3/api')).toBe(null);
+      expect(getValidatedFetchUrl('http://0.0.0.0/api')).toBe(null);
+    });
+
+    it('blocks RFC-1918 private ranges (SSRF)', () => {
+      expect(getValidatedFetchUrl('http://10.0.0.1/')).toBe(null);
+      expect(getValidatedFetchUrl('http://10.255.255.255/')).toBe(null);
+      expect(getValidatedFetchUrl('http://172.16.0.1/')).toBe(null);
+      expect(getValidatedFetchUrl('http://172.31.255.255/')).toBe(null);
+      expect(getValidatedFetchUrl('http://192.168.1.1/')).toBe(null);
+    });
+
+    it('does not block public IPs outside private ranges', () => {
+      expect(getValidatedFetchUrl('http://172.15.0.1/')).toBe('http://172.15.0.1/');
+      expect(getValidatedFetchUrl('http://172.32.0.1/')).toBe('http://172.32.0.1/');
+      expect(getValidatedFetchUrl('http://11.0.0.1/')).toBe('http://11.0.0.1/');
+      expect(getValidatedFetchUrl('http://1.2.3.4/')).toBe('http://1.2.3.4/');
+    });
+
+    it('blocks link-local and metadata endpoints (SSRF)', () => {
+      expect(getValidatedFetchUrl('http://169.254.169.254/')).toBe(null);
+      expect(getValidatedFetchUrl('http://169.254.1.1/')).toBe(null);
+      expect(getValidatedFetchUrl('http://metadata.google.internal/')).toBe(null);
+    });
+
+    it('blocks IPv6 loopback and ULA (SSRF)', () => {
+      expect(getValidatedFetchUrl('http://[::1]/api')).toBe(null);
+      expect(getValidatedFetchUrl('http://[::]/api')).toBe(null);
+      expect(getValidatedFetchUrl('http://[fc00::1]/api')).toBe(null);
+      expect(getValidatedFetchUrl('http://[fd12:3456::1]/api')).toBe(null);
+    });
   });
 
   describe('getRateLimitKey', () => {

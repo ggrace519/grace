@@ -1854,8 +1854,9 @@
         <!-- Config Form -->
         <form on:submit={initHandler} class="tlwd-space-y-4">
           <div>
-            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Open WebUI URL</label>
+            <label for="config-url" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Open WebUI URL</label>
             <input
+              id="config-url"
               type="url"
               bind:value={url}
               placeholder="http://localhost:8080"
@@ -1864,8 +1865,9 @@
             />
           </div>
           <div>
-            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">API Key</label>
+            <label for="config-key" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">API Key</label>
             <input
+              id="config-key"
               type="password"
               bind:value={key}
               placeholder="Enter your API key"
@@ -1874,9 +1876,10 @@
             />
           </div>
           <div>
-            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Model</label>
+            <label for="config-model" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Model</label>
             <div class="tlwd-flex tlwd-gap-2">
               <select
+                id="config-model"
                 bind:value={model}
                 class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
                 required

@@ -57,7 +57,7 @@ For a complete list of security features and implementation details, see [SECURI
 
 - **Spotlight Search**: Press `Cmd/Ctrl + Shift + K` to open a quick search interface
 - **Text Selection**: Automatically captures selected text when opening the search
-- **Direct AI Responses**: Use `Cmd/Ctrl + Shift + Enter` to get AI responses written directly into active input/textarea fields
+- **Direct AI Responses**: Use `Alt+Shift+Enter` to get AI responses written directly into active input/textarea fields
 - **Open WebUI Integration**: Seamlessly connects to your Open WebUI instance
 - **Model Selection**: Choose from available models in your Open WebUI setup
 - **Streaming Responses**: Real-time streaming of AI responses
@@ -155,7 +155,7 @@ To reset your configuration:
 ### Getting AI Responses Directly
 
 1. Select text on any webpage
-2. Press `Cmd/Ctrl + Shift + Enter`
+2. Press `Alt+Shift+Enter`
 3. A popup will appear showing the streaming AI response
 4. **Ask Follow-up Questions**: Type a follow-up question in the input field at the bottom of the popup
 5. Press `Enter` or click "Send" to continue the conversation
@@ -341,8 +341,8 @@ This fork includes comprehensive security enhancements. For detailed security in
 ## Changelog
 
 ### 2026-02-14
-- Added sidebar panel: open with `Ctrl+Shift+L` / `Cmd+Shift+L` or via "Open sidebar" context menu
-- Unified keyboard shortcuts in documentation: spotlight search `Ctrl+Shift+K`, sidebar `Ctrl+Shift+L`
+- Added sidebar panel: open with `Ctrl+Shift+Space` / `Cmd+Shift+Space` or via "Open sidebar" context menu
+- Unified keyboard shortcuts in documentation: spotlight search `Ctrl+Shift+Y`, sidebar `Ctrl+Shift+Space`
 - Updated project structure in README to include sidebar entry point and build output
 
 ### 2026-01-02

@@ -5,11 +5,11 @@ This document provides essential information for AI assistants working on the Op
 ## 📋 Project Overview
 
 This is a Chrome Extension (Manifest V3) that integrates with Open WebUI to provide:
-- Spotlight-style search interface (`Ctrl+Shift+K`)
-- Sidebar panel for persistent AI chat (`Ctrl+Shift+L` or context menu "Open sidebar")
+- Spotlight-style search interface (`Ctrl+Shift+Y`)
+- Sidebar panel for persistent AI chat (`Ctrl+Shift+Space` or context menu "Open sidebar")
 - AI-powered text explanations via context menu
 - Page summarization via context menu
-- Direct AI responses in input fields (`Ctrl+Shift+Enter`)
+- Direct AI responses in input fields (`Alt+Shift+Enter`)
 - Conversation history and follow-up questions
 - Streaming AI responses
 
@@ -214,7 +214,7 @@ let isRegisteringMenus = false;
 - [ ] Test in main frame (not iframe)
 - [ ] Test with text selected
 - [ ] Test without text selected
-- [ ] Test keyboard shortcuts (search `Ctrl+Shift+K`, sidebar `Ctrl+Shift+L`)
+- [ ] Test keyboard shortcuts (search `Ctrl+Shift+Y`, sidebar `Ctrl+Shift+Space`)
 - [ ] Test context menu options (Explain This, Summarize Page, Open sidebar)
 - [ ] Test on different websites (especially complex ones like homedepot.com)
 - [ ] Check console for errors

@@ -1381,16 +1381,16 @@
       // ====================================================================
       // ENHANCEMENT: Direct AI Response via Keyboard Shortcut
       // ====================================================================
-      // Ctrl+Shift+Enter (or Cmd+Shift+Enter) with selected text triggers
+      // Alt+Shift+Enter (or Opt+Shift+Enter on Mac) with selected text triggers
       // an AI response popup instead of navigating to OpenWebUI. Includes
       // API key decryption, conversation history management, and streaming
       // response display. Always fetches fresh config from storage.
       // ====================================================================
-      // Handle Ctrl+Shift+Enter (or Cmd+Shift+Enter) - get AI response directly
+      // Handle Alt+Shift+Enter (or Opt+Shift+Enter on Mac) - get AI response directly
       if (
         e.key === "Enter" &&
-        (e.metaKey || e.ctrlKey) &&
-        (e.shiftKey || e.altKey)
+        e.altKey &&
+        e.shiftKey
       ) {
         e.preventDefault();
         e.stopPropagation();

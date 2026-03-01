@@ -31,7 +31,7 @@ export function getUserFriendlyErrorMessage(error) {
   const errorMessage = error?.message || String(error);
 
   // Check for network errors
-  if (!navigator.onLine) {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return "No internet connection. Please check your connection and try again.";
   }
 
@@ -164,8 +164,6 @@ export const getModels = async (key, url) => {
       const lowerB = b.name.toLowerCase();
       if (lowerA < lowerB) return -1;
       if (lowerA > lowerB) return 1;
-      if (a < b) return -1;
-      if (a > b) return 1;
       return 0;
     });
 

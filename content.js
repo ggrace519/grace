@@ -119,9 +119,10 @@ function extractPageContentInTab() {
     // Strategy 1: semantic HTML5
     let mainContent = document.querySelector("main, article, [role=\"main\"]");
     if (mainContent && isVisible(mainContent)) {
-      const excluded = mainContent.querySelectorAll("nav, header, footer, aside, .ad, .advertisement, [id*=\"ad\"], [class*=\"ad\"]");
+      const clone = mainContent.cloneNode(true);
+      const excluded = clone.querySelectorAll("nav, header, footer, aside, .ad, .advertisement, [id*=\"ad\"], [class*=\"ad\"]");
       excluded.forEach((el) => el.remove());
-      const text = (mainContent.innerText || mainContent.textContent || "").trim();
+      const text = (clone.innerText || clone.textContent || "").trim();
       if (text.length > 100) return text;
     }
 
@@ -146,10 +147,8 @@ function extractPageContentInTab() {
     const body = document.body.cloneNode(true);
     const bodyExcluded = body.querySelectorAll("nav, header, footer, aside, script, style, .ad, .advertisement, [id*=\"ad\"], [class*=\"ad\"], [role=\"navigation\"], [role=\"banner\"]");
     bodyExcluded.forEach((el) => el.remove());
-    const allElements = body.querySelectorAll("*");
-    allElements.forEach((el) => {
-      if (!isVisible(el)) el.remove();
-    });
+    // Note: skipping isVisible() on detached clone nodes since offsetWidth/Height
+    // are always 0 for nodes not in the live DOM, which would incorrectly remove all elements.
     let text = (body.innerText || body.textContent || "").trim();
     text = text.replace(/\s+/g, " ").substring(0, 50000);
     if (text.length >= 50) return text;

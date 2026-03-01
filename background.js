@@ -406,11 +406,12 @@ function extractPageContentScript() {
   // Strategy 1: Look for semantic HTML5 elements
   let mainContent = document.querySelector('main, article, [role="main"]');
   if (mainContent && isVisible(mainContent)) {
-    const excluded = mainContent.querySelectorAll('nav, header, footer, aside, .ad, .advertisement, [id*="ad"], [class*="ad"]');
+    const clone = mainContent.cloneNode(true);
+    const excluded = clone.querySelectorAll('nav, header, footer, aside, .ad, .advertisement, [id*="ad"], [class*="ad"]');
     excluded.forEach(el => el.remove());
-    const text = mainContent.innerText || mainContent.textContent || '';
-    if (text.trim().length > 100) {
-      return text.trim();
+    const text = (clone.innerText || clone.textContent || '').trim();
+    if (text.length > 100) {
+      return text;
     }
   }
 
@@ -438,13 +439,8 @@ function extractPageContentScript() {
   const body = document.body.cloneNode(true);
   const excluded = body.querySelectorAll('nav, header, footer, aside, script, style, .ad, .advertisement, [id*="ad"], [class*="ad"], [role="navigation"], [role="banner"]');
   excluded.forEach(el => el.remove());
-
-  const allElements = body.querySelectorAll('*');
-  allElements.forEach(el => {
-    if (!isVisible(el)) {
-      el.remove();
-    }
-  });
+  // Note: skipping isVisible() on detached clone nodes since offsetWidth/Height
+  // are always 0 for nodes not in the live DOM, which would incorrectly remove all elements.
 
   const text = (body.innerText || body.textContent || '').trim();
   const cleanedText = text.replace(/\s+/g, ' ').substring(0, 50000);
@@ -1084,8 +1080,10 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
         });
         validateCSPHeaders(res);
         if (!res.ok) {
-          const error = await res.json();
-          reply({ error: getUserFriendlyErrorMessage(error) });
+          const errorText = await res.text();
+          let errorObj;
+          try { errorObj = JSON.parse(errorText); } catch (_) { errorObj = { message: `HTTP ${res.status}: ${errorText}` }; }
+          reply({ error: getUserFriendlyErrorMessage(errorObj) });
           return;
         }
         const data = await res.json();

@@ -141,7 +141,7 @@ function safeFetch(apiUrl, options) {
   return fetch(safeUrl, options);
 }
 
-// URL validation to prevent SSRF attacks
+// URL format + SSRF check. Must be http/https and must not target a blocked host.
 function isValidUrl(urlString) {
   if (!urlString || typeof urlString !== 'string') {
     return false;
@@ -152,7 +152,7 @@ function isValidUrl(urlString) {
     if (!['http:', 'https:'].includes(url.protocol)) {
       return false;
     }
-    if (url.protocol === 'javascript:' || url.protocol === 'data:') {
+    if (isBlockedHost(url.hostname)) {
       return false;
     }
     return true;
@@ -167,7 +167,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'openSidePanel'];
+const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'openSidePanel'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -852,6 +852,10 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
       });
     return true;
   } else if (request.action == "writeText") {
+    if (typeof request.text !== 'string' || request.text.length > 100000) {
+      sendResponse({ error: "Invalid text" });
+      return true;
+    }
     chrome.scripting.executeScript({
       target: { tabId: id, allFrames: true },
       func: (text, targetId) => {
@@ -1107,6 +1111,13 @@ chrome.runtime.onConnect.addListener((port) => {
         // Validate request body
         if (!msg.body || typeof msg.body !== 'object') {
           port.postMessage({ error: "Invalid request body" });
+          port.disconnect();
+          return;
+        }
+
+        // Cap messages array to prevent oversized payloads
+        if (Array.isArray(msg.body.messages) && msg.body.messages.length > 100) {
+          port.postMessage({ error: "Too many messages in request" });
           port.disconnect();
           return;
         }

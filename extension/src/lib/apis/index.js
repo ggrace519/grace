@@ -152,66 +152,84 @@ export const generateOpenAIChatCompletion = async (
   if (!isChromeAPIAvailable() || typeof chrome.runtime.connect === 'undefined') {
     return Promise.reject(new Error("Extension context invalidated - Chrome runtime.connect not available"));
   }
-  
-  // Create a port for streaming data from background script
+
+  // 5-minute hard timeout: abort the stream if the background never sends `done`.
+  const STREAM_TIMEOUT_MS = 5 * 60 * 1000;
+
   return new Promise((resolve, reject) => {
     const port = chrome.runtime.connect({ name: "chat-stream" });
     let controller = null;
     let streamEnded = false;
-    
-    // Create a ReadableStream that reads from the port
+
+    // Single cleanup path — idempotent so safe to call from multiple paths.
+    const cleanup = (err) => {
+      clearTimeout(timeoutId);
+      if (!streamEnded) {
+        streamEnded = true;
+        if (err && controller) controller.error(err);
+        else if (controller) controller.close();
+      }
+      port.disconnect();
+    };
+
+    const timeoutId = setTimeout(() => {
+      cleanup(new Error("Stream timed out"));
+    }, STREAM_TIMEOUT_MS);
+
+    // Create a ReadableStream that reads from the port.
+    // The cancel() hook fires if the consumer cancels (e.g. user closes modal).
     const stream = new ReadableStream({
       start(ctrl) {
         controller = ctrl;
-      }
+      },
+      cancel() {
+        cleanup(null);
+      },
     });
-    
+
     port.onMessage.addListener((msg) => {
       if (msg.error) {
-        if (controller) {
-          controller.error(new Error(msg.error));
-        }
-        port.disconnect();
+        cleanup(new Error(msg.error));
         reject(new Error(msg.error));
         return;
       }
-      
+
       if (msg.done) {
-        streamEnded = true;
-        if (controller) {
-          controller.close();
-        }
-        port.disconnect();
+        cleanup(null);
         return;
       }
-      
+
       if (msg.chunk && controller) {
         controller.enqueue(new TextEncoder().encode(msg.chunk));
       }
     });
-    
+
     port.onDisconnect.addListener(() => {
-      if (!streamEnded && controller) {
-        controller.error(new Error("Stream disconnected unexpectedly"));
+      if (!streamEnded) {
+        cleanup(new Error("Stream disconnected unexpectedly"));
       }
     });
-    
-    // Create Response-like object immediately
+
     const response = {
       ok: true,
       status: 200,
       body: stream,
     };
-    
-    // Send the fetch request
-    port.postMessage({
-      action: "fetchChatCompletion",
-      url: url,
-      api_key: api_key,
-      body: body,
-    });
-    
-    // Resolve immediately with the stream
-    resolve([response, { abort: () => { port.disconnect(); } }]);
+
+    // If postMessage throws the port is already unusable — clean up immediately.
+    try {
+      port.postMessage({
+        action: "fetchChatCompletion",
+        url: url,
+        api_key: api_key,
+        body: body,
+      });
+    } catch (err) {
+      cleanup(err);
+      reject(err);
+      return;
+    }
+
+    resolve([response, { abort: () => { cleanup(null); } }]);
   });
 };

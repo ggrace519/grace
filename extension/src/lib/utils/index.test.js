@@ -78,5 +78,28 @@ describe('utils', () => {
       expect(out).toContain('&lt;');
       expect(out).toContain('&amp;');
     });
+
+    it('strips raw HTML blocks to prevent XSS', () => {
+      const out = renderMarkdown('<script>alert(1)</script>');
+      expect(out).not.toContain('<script>');
+      expect(out).not.toContain('alert(1)');
+    });
+
+    it('strips inline event handlers from rendered output', () => {
+      const out = renderMarkdown('<img src="x" onerror="alert(1)">');
+      expect(out).not.toContain('onerror');
+      expect(out).not.toContain('alert(1)');
+    });
+
+    it('strips javascript: URLs from links', () => {
+      const out = renderMarkdown('[click me](javascript:alert(1))');
+      expect(out).not.toContain('javascript:');
+    });
+
+    it('preserves safe markdown formatting', () => {
+      const out = renderMarkdown('**bold** and [link](https://example.com)');
+      expect(out).toContain('<strong>');
+      expect(out).toContain('href="https://example.com"');
+    });
   });
 });

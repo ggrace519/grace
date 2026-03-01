@@ -19,15 +19,29 @@ export const splitStream = (splitOn) => {
 marked.setOptions({
   breaks: true,
   gfm: true,
-  headerIds: false,
-  mangle: false,
 });
 
-// Render markdown to HTML
+// Drop raw HTML blocks from LLM output to prevent XSS — markdown formatting is
+// preserved since marked still processes headings, bold, lists, code blocks, etc.
+marked.use({
+  renderer: {
+    html() {
+      return '';
+    },
+  },
+});
+
+// Render markdown to HTML, sanitizing the output to prevent XSS from
+// LLM-controlled content (malicious API responses, prompt injection, etc.)
 export const renderMarkdown = (text) => {
   if (!text) return '';
   try {
-    return marked.parse(text);
+    const html = marked.parse(text);
+    // Strip any event-handler attributes and javascript: URLs that might survive
+    // from link/image tokens not covered by the html renderer override.
+    return html
+      .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
+      .replace(/(href|src|action)\s*=\s*["']?\s*javascript\s*:[^"'\s>]*/gi, '$1="#"');
   } catch (error) {
     console.error('Error rendering markdown:', error);
     // Fallback to plain text with HTML escaping

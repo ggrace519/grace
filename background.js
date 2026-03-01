@@ -226,21 +226,6 @@ async function checkRateLimit(actionType) {
 }
 
 // ============================================================================
-// ENHANCEMENT: Content Security Policy (CSP) Validation
-// ============================================================================
-// Logs CSP headers from API responses for security monitoring. This helps
-// identify potential security issues with API responses.
-// ============================================================================
-function validateCSPHeaders(response) {
-  const cspHeader = response.headers.get('content-security-policy');
-  if (cspHeader) {
-    // Log CSP header for debugging (don't block, just log)
-    console.log("Extension: CSP header detected:", cspHeader);
-  }
-  return true; // Don't block based on CSP headers, just validate
-}
-
-// ============================================================================
 // ENHANCEMENT: API Key Encryption
 // ============================================================================
 // This fork adds AES-256-GCM encryption for API keys stored in chrome.storage.local.
@@ -330,8 +315,20 @@ async function decryptApiKey(encryptedApiKey) {
       throw new Error("Invalid encrypted API key");
     }
 
-    // Check if it's already decrypted (backward compatibility)
-    if (encryptedApiKey.length < 20 || !/^[A-Za-z0-9+/=]+$/.test(encryptedApiKey)) {
+    // Encrypted format: 12-byte IV + ciphertext + 16-byte GCM auth tag, base64-encoded.
+    // Minimum base64 length for even a 0-byte plaintext: ceil(28/3)*4 = 40 chars.
+    // Keys shorter than 40 chars, containing non-base64 chars (e.g. "sk-..."), or
+    // that don't decode to at least 28 bytes are definitely not our encrypted format.
+    const isLikelyEncrypted = (() => {
+      if (encryptedApiKey.length < 40) return false;
+      if (!/^[A-Za-z0-9+/=]+$/.test(encryptedApiKey)) return false;
+      try {
+        return atob(encryptedApiKey).length >= 28;
+      } catch {
+        return false;
+      }
+    })();
+    if (!isLikelyEncrypted) {
       return encryptedApiKey;
     }
 
@@ -434,20 +431,26 @@ function extractPageContentScript() {
     }
   }
 
-  // Strategy 3: Extract all visible text but filter out excluded elements
-  const body = document.body.cloneNode(true);
-  const excluded = body.querySelectorAll('nav, header, footer, aside, script, style, .ad, .advertisement, [id*="ad"], [class*="ad"], [role="navigation"], [role="banner"]');
-  excluded.forEach(el => el.remove());
-
-  const allElements = body.querySelectorAll('*');
-  allElements.forEach(el => {
-    if (!isVisible(el)) {
-      el.remove();
+  // Strategy 3: Walk the live DOM and collect text from non-excluded elements.
+  // We avoid cloning document.body (expensive on large pages) and avoid calling
+  // getComputedStyle on detached nodes (where it returns default values anyway).
+  const parts = [];
+  const nodeIter = document.createNodeIterator(document.body, NodeFilter.SHOW_TEXT);
+  let textNode;
+  while ((textNode = nodeIter.nextNode())) {
+    let el = textNode.parentElement;
+    let skip = false;
+    while (el && el !== document.body) {
+      if (shouldExclude(el)) { skip = true; break; }
+      el = el.parentElement;
     }
-  });
-
-  const text = (body.innerText || body.textContent || '').trim();
-  const cleanedText = text.replace(/\s+/g, ' ').substring(0, 50000);
+    if (!skip) {
+      const t = textNode.textContent.trim();
+      if (t) parts.push(t);
+    }
+    if (parts.join(' ').length >= 50000) break;
+  }
+  const cleanedText = parts.join(' ').replace(/\s+/g, ' ').substring(0, 50000);
 
   if (cleanedText.length >= 50) {
     return cleanedText;
@@ -733,7 +736,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       return;
     }
 
-    const selectedText = info.selectionText || "";
+    const MAX_SELECTED_TEXT = 10000;
+    const selectedText = (info.selectionText || "").slice(0, MAX_SELECTED_TEXT);
 
     if (!selectedText || selectedText.trim().length === 0) {
       console.warn("Extension: No text selected for explanation");
@@ -928,8 +932,6 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
           },
         });
 
-        validateCSPHeaders(res);
-
         if (!res.ok) {
           const error = await res.json();
           const friendlyError = getUserFriendlyErrorMessage(error);
@@ -1013,8 +1015,6 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
           },
           body: JSON.stringify(request.body),
         });
-
-        validateCSPHeaders(res);
 
         if (!res.ok) {
           const errorText = await res.text();
@@ -1107,8 +1107,6 @@ chrome.runtime.onConnect.addListener((port) => {
           body: JSON.stringify(msg.body),
         })
           .then(async (res) => {
-            validateCSPHeaders(res);
-
             if (!res.ok) {
               const errorText = await res.text();
               const friendlyError = getUserFriendlyErrorMessage({ message: `HTTP ${res.status}: ${errorText}` });

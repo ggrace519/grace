@@ -54,6 +54,7 @@
     followUpInput = "";
     conversationHistory = [];
     isStreaming = false;
+    clearMarkdownCache();
   };
 
   let url = "";
@@ -64,6 +65,25 @@
   let models = [];
   let responseContainer: HTMLElement | null = null;
   let userScrolledUp = false; // Track if user has manually scrolled up
+
+  // Timer handles — collected so they can all be cancelled on unmount.
+  const pendingTimers: ReturnType<typeof setTimeout>[] = [];
+  const scheduleTimer = (fn: () => void, delay: number) => {
+    const id = setTimeout(fn, delay);
+    pendingTimers.push(id);
+    return id;
+  };
+
+  // Markdown render cache — avoids re-parsing unchanged messages on every Svelte
+  // render cycle (e.g. during streaming when isStreaming/responseText changes).
+  const markdownCache = new Map<string, string>();
+  const getCachedMarkdown = (content: string): string => {
+    if (!markdownCache.has(content)) {
+      markdownCache.set(content, renderMarkdown(content));
+    }
+    return markdownCache.get(content)!;
+  };
+  const clearMarkdownCache = () => markdownCache.clear();
 
   const resetConfig = () => {
     console.log("resetConfig");
@@ -1004,7 +1024,7 @@
     userScrolledUp = false; // Reset scroll flag for new stream
     
     // Focus the input after a short delay
-    setTimeout(() => {
+    scheduleTimer(() => {
       const inputElement = document.getElementById("open-webui-followup-input");
       if (inputElement) {
         inputElement.focus();
@@ -1303,7 +1323,7 @@
     // Also listen for messages as fallback
     // Only process in main frame to avoid duplicate processing when all_frames: true
     let isSummarizing = false;
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const handleRuntimeMessage = (request, _sender, sendResponse) => {
       if (request.action === "toggleSearch") {
         // Only process in main frame
         if (window === window.top) {
@@ -1319,7 +1339,7 @@
             errorMessage = request.error;
             showError = true;
             showResponse = true;
-            setTimeout(() => {
+            scheduleTimer(() => {
               showError = false;
               errorMessage = "";
               isSummarizing = false;
@@ -1343,7 +1363,7 @@
             errorMessage = request.error;
             showError = true;
             showResponse = true;
-            setTimeout(() => {
+            scheduleTimer(() => {
               showError = false;
               errorMessage = "";
               isExplaining = false;
@@ -1359,7 +1379,8 @@
         sendResponse({ success: true });
       }
       return true;
-    });
+    };
+    chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 
     const down = async (e) => {
       // Reset the configuration when ⌘Shift+Escape is pressed
@@ -1796,6 +1817,8 @@
       window.removeEventListener("open-webui-toggle-search", handleToggleEvent);
       window.removeEventListener("open-webui-summarize-page", handleSummarizeEvent as EventListener);
       window.removeEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
+      chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
+      pendingTimers.forEach(clearTimeout);
       delete window.openWebUIToggleSearch;
     };
   });
@@ -1915,7 +1938,7 @@
                   {#if msg.role === 'user'}
                     {msg.content}
                   {:else}
-                    {@html renderMarkdown(msg.content)}
+                    {@html getCachedMarkdown(msg.content)}
                   {/if}
                 </div>
               </div>
@@ -2086,7 +2109,7 @@
                     if (errorMsg.includes("Rate limit exceeded")) {
                       errorMessage = errorMsg;
                       showError = true;
-                      setTimeout(() => {
+                      scheduleTimer(() => {
                         showError = false;
                         errorMessage = "";
                       }, 5000);

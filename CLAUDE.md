@@ -4,117 +4,112 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Chrome extension for Open WebUI that provides a spotlight-style search interface for quick AI interactions. The extension connects to a local or remote Open WebUI instance (running Ollama or other LLM backends) and allows users to:
+This is a Chrome extension (Manifest V3) for Open WebUI that provides a spotlight-style search interface for quick AI interactions. It is a **security-enhanced fork** of the [open-webui/extension](https://github.com/open-webui/extension).
 
-- Get AI responses directly in input fields via keyboard shortcuts
-- Open a persistent sidebar panel for AI chat
-- Extract and summarize page content
-- Get explanations for selected text
-- Maintain conversation history with follow-up questions
+**License Compliance (CRITICAL)**: The BSD-style license requires preserving "Open WebUI" branding in the extension name, context menu titles, and all user-facing text. Never remove or alter copyright notices or "Open WebUI" branding.
 
 ## Architecture
 
-### High-Level Structure
+### Component Overview
 
 ```
-extension/
-├── manifest.json          # Chrome Manifest V3 configuration
-├── background.js          # Service worker (API calls, rate limiting, context menus)
-├── content.js             # Content script injector ( DOM setup )
-├── extension/             # Svelte frontend application
-│   ├── src/
-│   │   ├── main.ts        # Svelte app entry point (page overlay)
-│   │   ├── sidebar.ts     # Side panel entry point
-│   │   ├── App.svelte     # Root component
-│   │   └── lib/
-│   │       ├── apis/      # API helpers (background script communication)
-│   │       ├── components/ # Svelte components (SpotlightSearch)
-│   │       ├── utils/     # Markdown rendering, stream splitting
-│   │       └── background/ # Security modules (encryption, rate limiting, URL validation)
-│   ├── sidebar.html       # Side panel HTML template
-│   ├── dist/              # Build output (main.js, style.css, sidebar.html)
-│   └── package.json
+manifest.json          # Permissions, commands, content scripts, service worker declaration
+background.js          # Service worker: API calls, encryption, rate limiting, context menus
+content.js             # Injected into all pages: creates #extension-app div, injects CSS
+extension/src/
+  main.ts              # Mounts Svelte app onto #extension-app (page overlay)
+  sidebar.ts           # Same app with sidebarMode:true for Chrome side panel
+  lib/
+    components/SpotlightSearch.svelte  # All UI: search, responses, conversation history
+    apis/index.js                      # Background script communication helpers
+    utils/index.js                     # splitStream() SSE parser, renderMarkdown()
+    background/                        # Security modules (imported by background.js)
+      encryption.js                    # AES-256-GCM API key encrypt/decrypt
+      rateLimit.js                     # Sliding window rate limiter
+      urlValidation.js                 # SSRF protection
+    background-helpers.js              # URL validation + rate limit logic (testable, kept in sync with background.js)
 ```
 
-### Component Relationship
+### Data Flow
 
 ```
-User Action → content.js → background.js (Service Worker) → Open WebUI API
-                                ↓
-                      Returns via ports/messages
-                                ↓
-                      content.js → Svelte App → User Interface
+User Action → content.js → chrome.runtime.sendMessage → background.js → Open WebUI API
+                                                              ↓ (streaming: chrome.runtime.connect port)
+                                          SpotlightSearch.svelte ← content.js ← background.js
 ```
+
+Chat completions stream via `chrome.runtime.connect()` ports with `ReadableStream`; all other messages use `chrome.runtime.sendMessage`.
 
 ### Key Architectural Patterns
 
-1. **Manifest V3 Architecture**: Uses service workers instead of background pages
-2. **Message Passing**: Content scripts communicate with background service worker via `chrome.runtime.sendMessage`
-3. **Streaming via Ports**: Chat completions use `chrome.runtime.connect()` with ReadableStreams for real-time response streaming
-4. **Security-First Design**:
-   - API keys encrypted with AES-256-GCM (key derived from extension ID)
-   - SSRF protection via URL validation
-   - Rate limiting on all API endpoints
-   - Message action whitelist
+**Frame Isolation (CRITICAL)**: Content scripts run with `all_frames: true`, so every initialization point must guard against iframes:
+```javascript
+if (window !== window.top) return; // content.js, main.ts, SpotlightSearch.svelte onMount
+```
+
+**Duplicate Initialization Prevention**: `main.ts` uses a global flag `__openwebui_extension_initialized` to prevent re-mounting on extension reload.
+
+**Message Action Whitelist**: `background.js` validates all incoming messages against `ALLOWED_ACTIONS`:
+`getConfig`, `saveConfig`, `getModels`, `chatCompletion`, `extractPageContent`, `explainText`, `summarizePage`, `continueInOpenWebUI`
+
+**CSS Isolation**: Extension UI is scoped under `#extension-app` with `!important` rules in `app.css` to prevent host-page CSS interference.
+
+**Context Menu Timing**: Menu registration uses delays (100ms after removing, 50ms between items) and a guard flag to avoid race conditions between parent and child menu creation.
 
 ## Development Commands
 
-### Prerequisites
-- Node.js 18+
-- Chrome/Chromium-based browser
+All commands run from the `extension/` directory:
 
-### Commands (in `extension/` directory)
+```bash
+npm install           # Install dependencies
+npm run build         # Build to extension/dist/ (required before loading/reloading in Chrome)
+npm run check         # Svelte type checking
+npm test              # Run all Vitest tests once
+npm run test:watch    # Watch mode
+npm run test:coverage # Coverage report
+npm run test:deps     # npm audit for dependency vulnerabilities
+```
 
-| Command | Description |
-|---------|-------------|
-| `npm install` | Install dependencies |
-| `npm run dev` | Start Vite dev server (for testing outside extension) |
-| `npm run build` | Build production bundle to `extension/dist/` |
-| `npm run check` | Run Svelte type checking |
-| `npm test` | Run Vitest tests |
-| `npm run test:watch` | Watch mode for tests |
-| `npm run test:coverage` | Run tests with coverage report |
+**Run a single test file**:
+```bash
+npx vitest run src/lib/utils/index.test.js
+```
 
-## Common Tasks
-
-### Adding a New Feature
-
-1. **For UI changes**: Modify Svelte components in `extension/src/lib/components/`
-2. **For background logic**: Add functions in `background.js` or modules in `extension/src/lib/background/`
-3. **For API integration**: Update `extension/src/lib/apis/index.js`
-4. **After changes**: Rebuild with `npm run build` and reload extension in Chrome
-
-### Modifying Security Features
-
-- **Encryption**: `extension/src/lib/background/encryption.js` (AES-256-GCM)
-- **Rate Limiting**: `extension/src/lib/background/rateLimit.js` (sliding window)
-- **URL Validation**: `extension/src/lib/background/urlValidation.js` (SSRF protection)
-- **Content Security Policy**: Configured in `manifest.json`
-
-## Testing
-
-Tests use Vitest with Node environment:
-- Test files: `extension/src/**/*.test.{js,ts}`
-- Run: `npm test`
-- Coverage: `npm run test:coverage`
-
-## Keyboard Shortcuts
-
-- `Ctrl+Shift+K` / `Cmd+Shift+K`: Open spotlight search
-- `Ctrl+Shift+L` / `Cmd+Shift+L`: Open Open WebUI sidebar (side panel)
-- `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`: Send selected text for AI response
-
-## Context Menu Items
-
-- **Summarize Page**: Extract main content and get AI summary
-- **Explain This**: Get AI explanation for selected text
-- **Open sidebar**: Open the AI chat in Chrome’s side panel
+**CI pipeline** (GitHub Actions on push/PR to main/master, working dir: `extension/`):
+1. `npm ci` → `npm audit --audit-level=high` → `npm run check` → `npm run build` → `npm test`
 
 ## Build Output
 
-The Svelte app builds to `extension/dist/`:
-- `main.js` - Compiled JavaScript bundle
-- `style.css` - Compiled CSS styles
-- `vite.svg` - Asset file
+Vite builds two entry points into `extension/dist/`:
+- `main.js` + `sidebar.js` — compiled JS bundles
+- `style.css` — compiled styles
+- `sidebar.html` — copied from template
 
-This directory is git-ignored. Rebuild with `npm run build` after any source changes.
+The `dist/` directory is git-ignored; rebuild after any source changes then reload the extension in Chrome (`chrome://extensions/` → refresh icon).
+
+## Testing
+
+Test files live alongside source at `extension/src/**/*.test.{js,ts}`:
+
+| Test file | What's covered |
+|-----------|---------------|
+| `background-helpers.test.js` | URL validation (SSRF), rate-limit configs, validated fetch URLs |
+| `apis/index.test.js` | `getModels`, chat completion, Chrome API message handling |
+| `utils/index.test.js` | Stream parsing (`splitStream`), markdown rendering, safe HTML escaping |
+
+`background-helpers.js` extracts pure logic from `background.js` to make it unit-testable — keep these two files in sync.
+
+## Security Features
+
+- **Encryption**: API keys stored encrypted (AES-256-GCM, key derived from extension ID via PBKDF2 100k iterations) — `background.js` `encryptApiKey()`/`decryptApiKey()`
+- **Rate limits**: chat completions 10/min, model fetching 5/min, general 20/min
+- **SSRF protection**: `urlValidation.js` validates URLs before any fetch; only `http:` and `https:` are allowed
+- **CSP**: `manifest.json` sets `script-src 'self'; object-src 'self';`
+
+## Adding Features
+
+**New context menu item**: Register in `background.js` → `registerContextMenus()`, handle in `chrome.contextMenus.onClicked`, add the action string to `ALLOWED_ACTIONS`, handle in `SpotlightSearch.svelte` message listener.
+
+**New API endpoint**: Add handler in `background.js`, add action to `ALLOWED_ACTIONS`, call via `chrome.runtime.sendMessage` from `apis/index.js`.
+
+**After any change**: `npm run build` → reload extension in Chrome → test on multiple sites including complex ones (CSS isolation issues often appear on sites like homedepot.com).

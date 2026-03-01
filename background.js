@@ -79,7 +79,7 @@ function getUserFriendlyErrorMessage(error) {
 // other potentially dangerous schemes.
 // ============================================================================
 
-// SSRF blocklist: hostnames/IPs that must never be requested (cloud metadata, etc.)
+// SSRF blocklist: exact hostnames that must never be requested (cloud metadata, etc.)
 const SSRF_BLOCKED_HOSTS = [
   '169.254.169.254',           // AWS/GCP/Azure metadata
   'metadata.google.internal',
@@ -89,9 +89,31 @@ const SSRF_BLOCKED_HOSTS = [
 
 function isBlockedHost(host) {
   if (!host || typeof host !== 'string') return true;
-  const normalized = host.toLowerCase().trim();
+  // Strip IPv6 brackets (url.hostname behaviour varies across runtimes)
+  const normalized = host.toLowerCase().trim().replace(/^\[|\]$/g, '');
+
+  // Named metadata endpoints
   if (SSRF_BLOCKED_HOSTS.some((blocked) => normalized === blocked.toLowerCase())) return true;
-  if (normalized.startsWith('169.254.')) return true; // link-local metadata range
+
+  // IPv4 private / loopback / unspecified ranges
+  if (normalized === '0.0.0.0') return true;
+  if (normalized.startsWith('127.')) return true;       // loopback 127.0.0.0/8
+  if (normalized.startsWith('10.')) return true;        // private 10.0.0.0/8
+  if (normalized.startsWith('192.168.')) return true;   // private 192.168.0.0/16
+  if (normalized.startsWith('169.254.')) return true;   // link-local 169.254.0.0/16
+  if (normalized.startsWith('172.')) {
+    const second = parseInt(normalized.split('.')[1], 10);
+    if (second >= 16 && second <= 31) return true;      // private 172.16.0.0/12
+  }
+
+  // IPv6 loopback / unspecified / ULA (fc00::/7)
+  const isIPv6 = normalized.includes(':');
+  if (isIPv6) {
+    if (normalized === '::1') return true;              // loopback
+    if (normalized === '::') return true;               // unspecified
+    if (/^f[cd]/.test(normalized)) return true;        // ULA fc00::/7
+  }
+
   return false;
 }
 
@@ -145,7 +167,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'summarizePage', 'explainText', 'openSidePanel'];
+const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'openSidePanel'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -983,6 +1005,14 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     (async () => {
       if (!isValidUrl(request.url)) {
         sendResponse({ error: "Invalid URL format" });
+        return;
+      }
+
+      const rateLimitCheck = await checkRateLimit('general');
+      if (!rateLimitCheck.allowed) {
+        sendResponse({
+          error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before trying again.`
+        });
         return;
       }
 

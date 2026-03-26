@@ -43,6 +43,7 @@
   let isStreaming = false; // ENHANCEMENT: Tracks if response is currently streaming
   let errorMessage = ""; // ENHANCEMENT: Error message for rate limits, etc.
   let showError = false; // ENHANCEMENT: Controls error message visibility
+  let configFormError = ""; // Error shown inside the config form when model loading fails
 
   const closeResponseModal = () => {
     showResponse = false;
@@ -332,6 +333,7 @@ End of page content.
       }
     }
 
+    configFormError = "";
     showConfig = false;
 
     // Fetch models for the sidebar dropdown
@@ -371,15 +373,15 @@ End of page content.
 
     show = !show;
 
-    setTimeout(() => {
-      const inputElement = document.getElementById(
-        "open-webui-search-input"
-      );
-
-      if (inputElement) {
-        inputElement.focus();
-      }
-    }, 0);
+    if (!sidebarMode) {
+      setTimeout(() => {
+        const inputId = showConfig ? "open-webui-url-input" : "open-webui-search-input";
+        const inputElement = document.getElementById(inputId);
+        if (inputElement) {
+          inputElement.focus();
+        }
+      }, 0);
+    }
   };
 
   // ========================================================================
@@ -2144,21 +2146,10 @@ End of page content.
 
                   try {
                     models = await getModels(key, url);
-                    // Clear any previous errors
-                    showError = false;
-                    errorMessage = "";
+                    configFormError = "";
                   } catch (error) {
                     const errorMsg = error?.message || String(error);
-                    if (errorMsg.includes("Rate limit exceeded")) {
-                      errorMessage = errorMsg;
-                      showError = true;
-                      setTimeout(() => {
-                        showError = false;
-                        errorMessage = "";
-                      }, 5000);
-                    } else {
-                      console.error("Extension: Error fetching models:", error);
-                    }
+                    configFormError = errorMsg || "Failed to load models. Check URL and API key.";
                   }
                 }}
               >
@@ -2178,6 +2169,10 @@ End of page content.
                 </svg>
               </button>
             </div>
+
+            {#if configFormError}
+              <p class="tlwd-text-red-400 tlwd-text-sm tlwd-mt-2 tlwd-px-1">{configFormError}</p>
+            {/if}
 
             {#if models && models.length > 0}
               <div

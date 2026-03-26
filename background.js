@@ -934,44 +934,49 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // ============================================================================
 // ENHANCEMENT: Message Handler
 // ============================================================================
-chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
-  // Validate message action
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+  // Validate message action (sync — must complete before any await so the port stays open)
   if (!request.action || !ALLOWED_ACTIONS.includes(request.action)) {
     console.error("Extension: Invalid action:", request.action);
     sendResponse({ error: "Invalid action" });
     return false;
   }
 
-  // Validate sender - allow certain actions without tab validation
-  const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup'];
-  const needsTab = !actionsWithoutTab.includes(request.action);
-
-  // Ping: wake service worker; reply immediately so sidebar can then send getSidebarInit while worker is warm.
+  // Ping: wake service worker; reply immediately (sync — no async needed).
   if (request.action === "ping") {
     sendResponse({ pong: true });
     return false;
   }
 
-  // For actions that need a tab, try to get it from the message or query active tab
-  let id = sender?.tab?.id;
-  if (needsTab && !id) {
-    // Try to get the active tab
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs && tabs[0]) {
-        id = tabs[0].id;
-      }
-    } catch (e) {
-      // Continue without tab ID
-    }
-  }
+  // All remaining handlers are async. Run them in an IIFE and return true
+  // synchronously so Chrome keeps the message port open for sendResponse.
+  // (Declaring the listener itself as `async` returns a Promise, which Chrome
+  //  treats as a non-true return value and immediately closes the port.)
+  (async () => {
+    // Validate sender - allow certain actions without tab validation
+    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup'];
+    const needsTab = !actionsWithoutTab.includes(request.action);
 
-  // If action needs a tab but we don't have one, return error
-  if (needsTab && !id) {
-    console.error("Extension: No tab available for action:", request.action);
-    sendResponse({ error: "No tab available" });
-    return false;
-  }
+    // For actions that need a tab, try to get it from the message or query active tab
+    let id = sender?.tab?.id;
+    if (needsTab && !id) {
+      // Try to get the active tab
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs && tabs[0]) {
+          id = tabs[0].id;
+        }
+      } catch (e) {
+        // Continue without tab ID
+      }
+    }
+
+    // If action needs a tab but we don't have one, return error
+    if (needsTab && !id) {
+      console.error("Extension: No tab available for action:", request.action);
+      sendResponse({ error: "No tab available" });
+      return;
+    }
 
   if (request.action == "getSelection") {
     chrome.scripting
@@ -983,6 +988,9 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
       })
       .then((res) => {
         sendResponse({ data: res[0]["result"] });
+      })
+      .catch((err) => {
+        sendResponse({ error: getUserFriendlyErrorMessage(err) });
       });
     return true;
   } else if (request.action == "writeText") {
@@ -1084,8 +1092,12 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
         });
         validateCSPHeaders(res);
         if (!res.ok) {
-          const error = await res.json();
-          reply({ error: getUserFriendlyErrorMessage(error) });
+          let errMsg = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            errMsg = String(body?.detail || body?.message || body?.error || errMsg);
+          } catch (_) {}
+          reply({ error: getUserFriendlyErrorMessage({ message: errMsg }) });
           return;
         }
         const data = await res.json();
@@ -1299,7 +1311,7 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
   } else {
     sendResponse({});
   }
-
+  })();
   return true;
 });
 

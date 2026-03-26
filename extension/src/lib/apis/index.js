@@ -106,7 +106,7 @@ const isMessagePortClosedError = (err) => {
 };
 
 // Send message to background with retries (handles service worker wake-up / port timeout).
-function sendMessageWithRetry(message, maxRetries = 4) {
+function sendMessageWithRetry(message, maxRetries = 6) {
   const c = getChrome();
   if (!c?.runtime?.sendMessage) {
     return Promise.reject(new Error("Extension context invalidated - Chrome APIs not available"));
@@ -120,7 +120,7 @@ function sendMessageWithRetry(message, maxRetries = 4) {
           const msg = lastError.message || "";
           if (isMessagePortClosedError(msg) && attempts < maxRetries) {
             attempts += 1;
-            setTimeout(send, 200 * attempts);
+            setTimeout(send, 300 * attempts);
             return;
           }
           reject(new Error(msg));
@@ -137,7 +137,7 @@ function sendMessageWithRetry(message, maxRetries = 4) {
 export const pingSidebarWake = () => {
   const c = getChrome();
   if (!c?.runtime?.sendMessage) return Promise.resolve();
-  return sendMessageWithRetry({ action: "ping" }, 2).catch(() => {});
+  return sendMessageWithRetry({ action: "ping" }, 4).catch(() => {});
 };
 
 export const getModels = async (key, url) => {

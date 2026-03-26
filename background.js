@@ -1283,6 +1283,7 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
       if (tabId != null) {
         sidePanelContextTabIdMemory = tabId;
         chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
+        sendResponse({ success: true });
       } else {
         chrome.tabs.query({ active: true, lastFocusedWindow: true }, (ft) => {
           const id = (ft && ft[0]) ? ft[0].id : null;
@@ -1290,9 +1291,9 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
             sidePanelContextTabIdMemory = id;
             chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: id }).catch(() => {});
           }
+          sendResponse({ success: true });
         });
       }
-      sendResponse({ success: true });
     });
     return true;
   } else {

@@ -156,6 +156,9 @@
     if (sidebarMode && isFirstMessage) {
       let pageContext = sidebarPageContext;
       if (!pageContext || pageContext.trim().length === 0) {
+        // Ping to wake worker before getting page content
+        await pingSidebarWake();
+        await new Promise((r) => setTimeout(r, 250));
         try {
           const pageResult = await getActiveTabPageContent();
           if (pageResult?.data && pageResult.data.trim().length > 0) {
@@ -511,7 +514,7 @@ End of page content.
             break;
           }
 
-          try {
+              try {
             let lines = value.split("\n");
             for (const line of lines) {
               if (line !== "") {
@@ -668,7 +671,7 @@ End of page content.
         
         // Decrypt API key if it exists
         if (storedConfig.key) {
-          try {
+              try {
             const decryptionResponse = await chrome.runtime.sendMessage({
               action: "decryptApiKey",
               encryptedApiKey: storedConfig.key
@@ -771,7 +774,7 @@ End of page content.
             break;
           }
 
-          try {
+              try {
             let lines = value.split("\n");
             for (const line of lines) {
               if (line !== "") {
@@ -912,7 +915,7 @@ End of page content.
         if (storedConfig.url) currentUrl = storedConfig.url;
         if (storedConfig.key) {
           // Decrypt API key if needed
-          try {
+              try {
             const decryptionResponse = await chrome.runtime.sendMessage({
               action: "decryptApiKey",
               encryptedApiKey: storedConfig.key
@@ -1116,7 +1119,7 @@ End of page content.
             break;
           }
 
-          try {
+              try {
             let lines = value.split("\n");
             for (const line of lines) {
               if (line !== "") {
@@ -1454,7 +1457,7 @@ End of page content.
             return;
           }
         } else {
-          try {
+              try {
             const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
             if (storedConfig.url) {
               currentUrl = storedConfig.url;
@@ -1759,7 +1762,7 @@ End of page content.
     // Sidebar: wake worker with ping, then fast getSidebarInit (config only), then page content + models with retry.
     if (sidebarMode && canLoadConfig) {
       await pingSidebarWake();
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 600));
       const initResult = await getSidebarInit();
       if (!initResult.error && (initResult.url != null || initResult.key != null || initResult.model != null)) {
         url = initResult.url ?? "";
@@ -1769,13 +1772,16 @@ End of page content.
         sidebarPageContext = typeof initResult.pageContent === "string" ? initResult.pageContent : "";
         showConfig = !(url && key && model);
         if (url && key) {
-          try {
+          // Ping again before these calls to keep worker warm
+          await pingSidebarWake();
+          await new Promise((r) => setTimeout(r, 250));
+              try {
             const pageResult = await getActiveTabPageContent();
             if (pageResult?.data && typeof pageResult.data === "string" && pageResult.data.trim()) {
               sidebarPageContext = pageResult.data;
             }
           } catch (_) {}
-          try {
+              try {
             models = await getModels(key, url);
           } catch (err) {
             console.debug("Extension: Failed to load models (non-critical):", err);
@@ -1798,6 +1804,9 @@ End of page content.
           if (_storageCache.url && key && _storageCache.model) {
             showConfig = false;
             if (models.length === 0) {
+              // Ping to keep worker warm before fetching models
+              await pingSidebarWake();
+              await new Promise((r) => setTimeout(r, 200));
               try {
                 models = await getModels(key, _storageCache.url);
               } catch (err) {
@@ -1831,7 +1840,10 @@ End of page content.
       if (_storageCache.url && key && _storageCache.model) {
         showConfig = false;
         if (models.length === 0) {
-          try {
+          // Ping to keep worker warm before fetching models
+          await pingSidebarWake();
+          await new Promise((r) => setTimeout(r, 200));
+              try {
             models = await getModels(key, _storageCache.url);
           } catch (err) {
             console.debug("Extension: Failed to load models (non-critical):", err);

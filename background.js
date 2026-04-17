@@ -1096,56 +1096,65 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         responded = true;
         try { sendResponse(payload); } catch (e) {}
       };
-      try {
-        if (!isValidUrl(request.url)) {
-          reply({ error: "Invalid URL format" });
-          return;
+      const { url, key, rawKey, providerType } = request;
+
+      // rawKey is used from the Settings form (unencrypted, typed by user)
+      // key is the encrypted key from storage (needs decryption)
+      let decryptedKey = '';
+      if (rawKey) {
+        decryptedKey = rawKey;
+      } else if (key) {
+        try {
+          decryptedKey = await decryptApiKey(key);
+        } catch (e) {
+          return reply({ error: 'Failed to decrypt API key' });
         }
-        if (request.key && typeof request.key !== "string") {
-          reply({ error: "Invalid API key format" });
-          return;
-        }
-        let decryptedKey = request.key;
-        if (request.key) {
-          try {
-            decryptedKey = await decryptApiKey(request.key);
-          } catch (error) {
-            console.error("Extension: Failed to decrypt API key for models request:", error);
-            decryptedKey = request.key;
+      }
+
+      const rateLimitCheck = await checkRateLimit("fetchModels");
+      if (!rateLimitCheck.allowed) {
+        reply({ error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before fetching models again.` });
+        return;
+      }
+
+      if (providerType === 'anthropic') {
+        try {
+          const resp = await fetch('https://api.anthropic.com/v1/models', {
+            headers: {
+              'x-api-key': decryptedKey,
+              'anthropic-version': '2023-06-01',
+            },
+          });
+          if (!resp.ok) {
+            const err = await resp.text().catch(() => '');
+            return reply({ error: `Anthropic models error: ${resp.status} ${err}` });
           }
+          const anthropicData = await resp.json();
+          const models = (anthropicData.data || [])
+            .filter((m) => m.id && m.id.startsWith('claude-'))
+            .map((m) => ({ id: m.id, name: m.display_name || m.id }));
+          return reply({ data: { data: models } });
+        } catch (e) {
+          return reply({ error: e.message });
         }
-        const rateLimitCheck = await checkRateLimit("fetchModels");
-        if (!rateLimitCheck.allowed) {
-          reply({ error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before fetching models again.` });
-          return;
-        }
-        const apiUrl = `${request.url}/api/models`;
-        if (!isValidUrl(apiUrl)) {
-          reply({ error: "Invalid API URL" });
-          return;
-        }
-        const res = await safeFetch(apiUrl, {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            ...(decryptedKey && { authorization: `Bearer ${decryptedKey}` }),
-          },
+      }
+
+      // OpenAI-compatible path
+      const apiUrl = `${url}/api/models`;
+      const validatedUrl = getValidatedFetchUrl(apiUrl);
+      if (!validatedUrl) return reply({ error: 'Invalid server URL' });
+      try {
+        const resp = await fetch(validatedUrl, {
+          headers: { Authorization: `Bearer ${decryptedKey}` },
         });
-        validateCSPHeaders(res);
-        if (!res.ok) {
-          let errMsg = `HTTP ${res.status}`;
-          try {
-            const body = await res.json();
-            errMsg = String(body?.detail || body?.message || body?.error || errMsg);
-          } catch (_) {}
-          reply({ error: getUserFriendlyErrorMessage({ message: errMsg }) });
-          return;
+        if (!resp.ok) {
+          const err = await resp.text().catch(() => '');
+          return reply({ error: `Models error: ${resp.status} ${err}` });
         }
-        const data = await res.json();
-        reply({ data: data });
-      } catch (error) {
-        reply({ error: getUserFriendlyErrorMessage(error) });
+        const data = await resp.json();
+        return reply({ data });
+      } catch (e) {
+        return reply({ error: e.message });
       }
     })();
     return true;

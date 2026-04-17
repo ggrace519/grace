@@ -983,7 +983,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
     }
   } else if (info.menuItemId === 'open-settings') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+    chrome.tabs.create({ url: chrome.runtime.getURL('extension/dist/settings.html') });
     return;
   }
 });
@@ -1385,7 +1385,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         responded = true;
         try { sendResponse(payload); } catch (e) {}
       };
-      chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+      chrome.tabs.create({ url: chrome.runtime.getURL('extension/dist/settings.html') });
       reply({ success: true });
     })();
     return true;

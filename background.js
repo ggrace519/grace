@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -677,24 +677,24 @@ function registerContextMenus() {
 
     setTimeout(() => {
       chrome.contextMenus.create({
-        id: 'openwebui-extension',
-        title: 'OpenWebUI Extension',
-        contexts: ['page', 'selection', 'editable']
+        id: 'ai-extension',
+        title: 'AI Extension',
+        contexts: ['all']
       }, () => {
         if (chrome.runtime.lastError) {
-          console.error("Extension: Error creating OpenWebUI Extension context menu:", chrome.runtime.lastError.message);
+          console.error("Extension: Error creating AI Extension context menu:", chrome.runtime.lastError.message);
           isRegisteringMenus = false;
           return;
         }
 
-        console.log("Extension: OpenWebUI Extension context menu created successfully");
+        console.log("Extension: AI Extension context menu created successfully");
 
         setTimeout(() => {
           chrome.contextMenus.create({
             id: 'summarize-page',
-            parentId: 'openwebui-extension',
+            parentId: 'ai-extension',
             title: 'Summarize Page',
-            contexts: ['page', 'selection']
+            contexts: ['all']
           }, () => {
             if (chrome.runtime.lastError) {
               console.error("Extension: Error creating summarize context menu:", chrome.runtime.lastError.message);
@@ -705,7 +705,7 @@ function registerContextMenus() {
 
           chrome.contextMenus.create({
             id: 'explain-text',
-            parentId: 'openwebui-extension',
+            parentId: 'ai-extension',
             title: 'Explain This',
             contexts: ['selection']
           }, () => {
@@ -718,9 +718,9 @@ function registerContextMenus() {
 
           chrome.contextMenus.create({
             id: 'open-search',
-            parentId: 'openwebui-extension',
+            parentId: 'ai-extension',
             title: 'Open search',
-            contexts: ['page', 'selection', 'editable']
+            contexts: ['all']
           }, () => {
             if (chrome.runtime.lastError) {
               console.error("Extension: Error creating open search context menu:", chrome.runtime.lastError.message);
@@ -729,17 +729,29 @@ function registerContextMenus() {
             }
           });
 
-          // Add "Open Sidebar" context menu
           chrome.contextMenus.create({
             id: 'open-sidebar',
-            parentId: 'openwebui-extension',
-            title: 'Open Sidebar',
-            contexts: ['page', 'selection']
+            parentId: 'ai-extension',
+            title: 'Open sidebar',
+            contexts: ['all']
           }, () => {
             if (chrome.runtime.lastError) {
               console.error("Extension: Error creating open sidebar context menu:", chrome.runtime.lastError.message);
             } else {
               console.log("Extension: Open sidebar context menu created successfully");
+            }
+          });
+
+          chrome.contextMenus.create({
+            id: 'open-settings',
+            parentId: 'ai-extension',
+            title: 'Settings',
+            contexts: ['all']
+          }, () => {
+            if (chrome.runtime.lastError) {
+              console.error("Extension: Error creating settings context menu:", chrome.runtime.lastError.message);
+            } else {
+              console.log("Extension: Settings context menu created successfully");
             }
           });
         }, 50);
@@ -970,6 +982,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       sidePanelContextTabIdMemory = tab.id;
       chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
     }
+  } else if (info.menuItemId === 'open-settings') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+    return;
   }
 });
 
@@ -996,7 +1011,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   //  treats as a non-true return value and immediately closes the port.)
   (async () => {
     // Validate sender - allow certain actions without tab validation
-    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings'];
+    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey'];
     const needsTab = !actionsWithoutTab.includes(request.action);
 
     // For actions that need a tab, try to get it from the message or query active tab
@@ -1372,6 +1387,110 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       };
       chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
       reply({ success: true });
+    })();
+    return true;
+  } else if (request.action == "saveProvider") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers'], async (data) => {
+        let providers = data.providers || [];
+        let encryptedKey;
+        try {
+          encryptedKey = await encryptApiKey(request.provider.rawKey);
+        } catch (e) {
+          return reply({ error: 'Encryption failed' });
+        }
+
+        if (request.provider.id) {
+          // Update existing
+          providers = providers.map((p) =>
+            p.id === request.provider.id
+              ? { ...p, name: request.provider.name, type: request.provider.type, url: request.provider.url || null, encryptedKey }
+              : p
+          );
+        } else {
+          // Create new
+          const newProvider = {
+            id: crypto.randomUUID(),
+            name: request.provider.name,
+            type: request.provider.type,
+            url: request.provider.url || null,
+            encryptedKey,
+          };
+          providers = [...providers, newProvider];
+        }
+
+        chrome.storage.local.set({ providers }, () => reply({ success: true, providers }));
+      });
+    })();
+    return true;
+  } else if (request.action == "deleteProvider") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers', 'activeProviderId'], (data) => {
+        const providers = (data.providers || []).filter((p) => p.id !== request.providerId);
+        const updates = { providers };
+        if (data.activeProviderId === request.providerId) {
+          updates.activeProviderId = providers[0]?.id ?? '';
+        }
+        chrome.storage.local.set(updates, () => reply({ success: true, providers }));
+      });
+    })();
+    return true;
+  } else if (request.action == "setActiveProvider") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.set({ activeProviderId: request.providerId }, () =>
+        reply({ success: true })
+      );
+    })();
+    return true;
+  } else if (request.action == "setActiveModel") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.set({ activeModel: request.model }, () =>
+        reply({ success: true })
+      );
+    })();
+    return true;
+  } else if (request.action == "decryptProviderKey") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers'], async (data) => {
+        const provider = (data.providers || []).find((p) => p.id === request.providerId);
+        if (!provider) return reply({ error: 'Provider not found' });
+        try {
+          const key = await decryptApiKey(provider.encryptedKey);
+          reply({ key });
+        } catch (e) {
+          reply({ error: 'Decryption failed' });
+        }
+      });
     })();
     return true;
   } else {

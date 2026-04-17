@@ -996,7 +996,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   //  treats as a non-true return value and immediately closes the port.)
   (async () => {
     // Validate sender - allow certain actions without tab validation
-    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup'];
+    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings'];
     const needsTab = !actionsWithoutTab.includes(request.action);
 
     // For actions that need a tab, try to get it from the message or query active tab

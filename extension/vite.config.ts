@@ -11,6 +11,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         sidebar: resolve(__dirname, "sidebar.html"),
+        settings: resolve(__dirname, "settings.html"),
       },
       output: {
         dir: "dist/",

@@ -140,40 +140,19 @@ export const pingSidebarWake = () => {
   return sendMessageWithRetry({ action: "ping" }, 4).catch(() => {});
 };
 
-export const getModels = async (key, url) => {
-  const c = getChrome();
-  if (!c?.runtime?.sendMessage) {
-    return Promise.reject(new Error("Extension context invalidated - Chrome APIs not available"));
+export async function getModels(providerId, providerType, url, encryptedKey) {
+  try {
+    const response = await sendMessageWithRetry(
+      { action: 'fetchModels', providerId, providerType, url: url || '', key: encryptedKey }
+    );
+    if (!response) {
+      return { error: 'Failed to fetch models' };
+    }
+    return response;
+  } catch (e) {
+    return { error: e?.message || 'Failed to fetch models' };
   }
-
-  const response = await sendMessageWithRetry({
-    action: "fetchModels",
-    url: url,
-    key: key,
-  });
-
-  if (response?.error) {
-    throw new Error(response.error);
-  }
-
-  let models = response?.data?.data ?? [];
-  models = models
-    .filter((m) => m)
-    .sort((a, b) => {
-      const lowerA = a.name.toLowerCase();
-      const lowerB = b.name.toLowerCase();
-      if (lowerA < lowerB) return -1;
-      if (lowerA > lowerB) return 1;
-      if (a < b) return -1;
-      if (a > b) return 1;
-      return 0;
-    });
-
-  if (models.length > 0) {
-    console.debug(`Extension: Loaded ${models.length} model(s)`);
-  }
-  return models;
-};
+}
 
 /**
  * Decrypt API key via background (with retry on port closed).
@@ -210,31 +189,21 @@ export const encryptApiKeyViaBackground = async (apiKey) => {
 };
 
 /**
- * Single round-trip for sidebar init: config (decrypted key), models, and page content.
- * Use in sidebar onMount to avoid multiple message round-trips and "message port closed" errors.
- * @returns {Promise<{ url?: string, key?: string, model?: string, models?: Array, pageContent?: string, error?: string }>}
+ * Single round-trip for sidebar init: returns config from background (multi-provider schema).
+ * The key is already decrypted by the background. Fetch models and pageContent separately.
+ * @returns {Promise<{ providers?, activeProviderId?, activeModel?, providerType?, url?, key?, error? }>}
  */
-export const getSidebarInit = async () => {
+export async function getSidebarInit() {
   try {
-    const c = getChrome();
-    if (!c?.runtime?.sendMessage) {
-      return { error: "Chrome APIs not available" };
+    const response = await sendMessageWithRetry({ action: 'getSidebarInit' });
+    if (!response) {
+      return { error: 'No response' };
     }
-    const response = await sendMessageWithRetry({ action: "getSidebarInit" });
-    if (response?.error) {
-      return { error: response.error };
-    }
-    return {
-      url: response.url ?? "",
-      key: response.key ?? "",
-      model: response.model ?? "",
-      models: Array.isArray(response.models) ? response.models : [],
-      pageContent: typeof response.pageContent === "string" ? response.pageContent : "",
-    };
+    return response;
   } catch (e) {
-    return { error: (e?.message && String(e.message)) || "Failed to load" };
+    return { error: e?.message || 'No response' };
   }
-};
+}
 
 /**
  * Get the main text content of the currently active browser tab.

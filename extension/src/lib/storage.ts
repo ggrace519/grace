@@ -37,7 +37,7 @@ export function migrateStorageIfNeeded(raw: Record<string, any>): StorageSchema 
     name: 'My OpenAI Service',
     type: 'openai-compatible',
     encryptedKey: raw.key ?? '',
-    url: raw.url ?? '',
+    url: raw.url || null,
   });
 
   return {

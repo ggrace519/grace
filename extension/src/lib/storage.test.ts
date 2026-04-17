@@ -48,7 +48,7 @@ describe('buildNewProvider', () => {
     const p = buildNewProvider({ name: 'My Claude', type: 'anthropic', encryptedKey: 'enc', url: null });
     expect(p.type).toBe('anthropic');
     expect(p.url).toBeNull();
-    expect(p.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(p.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   });
 
   it('creates an openai-compatible provider with url', () => {

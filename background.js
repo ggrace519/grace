@@ -1447,6 +1447,88 @@ chrome.runtime.onConnect.addListener((port) => {
           return;
         }
 
+        if (msg.providerType === 'anthropic') {
+          let decryptedKey = '';
+          try {
+            decryptedKey = await decryptApiKey(msg.key);
+          } catch (e) {
+            safePortPost(port, { error: 'Failed to decrypt API key' });
+            safePortDisconnect(port);
+            return;
+          }
+
+          // Build Anthropic request body: extract system message, set max_tokens
+          const systemMsg = (msg.body.messages || []).find((m) => m.role === 'system');
+          const userMessages = (msg.body.messages || []).filter((m) => m.role !== 'system');
+          const anthropicBody = {
+            model: msg.body.model,
+            messages: userMessages,
+            max_tokens: 8096,
+            stream: true,
+          };
+          if (systemMsg) anthropicBody.system = systemMsg.content;
+
+          let response;
+          try {
+            response = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'x-api-key': decryptedKey,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(anthropicBody),
+            });
+          } catch (e) {
+            safePortPost(port, { error: e.message });
+            safePortDisconnect(port);
+            return;
+          }
+
+          if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            safePortPost(port, { error: `${response.status}: ${errText}` });
+            safePortDisconnect(port);
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // last partial line stays in buffer
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith('data: ')) continue;
+              const jsonStr = trimmed.slice(6);
+              let parsed;
+              try { parsed = JSON.parse(jsonStr); } catch { continue; }
+
+              if (parsed.type === 'message_stop') {
+                safePortPost(port, { line: 'data: [DONE]' });
+                safePortDisconnect(port);
+                return;
+              }
+              if (
+                parsed.type === 'content_block_delta' &&
+                parsed.delta?.type === 'text_delta'
+              ) {
+                const normalized = `data: ${JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] })}`;
+                safePortPost(port, { line: normalized });
+              }
+            }
+          }
+          safePortDisconnect(port);
+          return;
+        }
+        // Existing OpenAI-compatible path continues below...
+
         const apiUrl = `${msg.url}/chat/completions`;
         if (!isValidUrl(apiUrl)) {
           safePortPost(port, { error: "Invalid API URL" });

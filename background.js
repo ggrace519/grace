@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -756,12 +756,54 @@ function registerContextMenus() {
 chrome.runtime.onInstalled.addListener((details) => {
   console.log("Extension: onInstalled event:", details.reason);
   registerContextMenus();
+
+  // Migrate old {url, key, model} schema to multi-provider schema
+  chrome.storage.local.get(null, (allData) => {
+    if (Array.isArray(allData.providers)) return; // already migrated
+    if (!allData.url && !allData.key) return;      // nothing to migrate
+
+    const id = crypto.randomUUID();
+    const newSchema = {
+      providers: [{
+        id,
+        name: 'My OpenAI Service',
+        type: 'openai-compatible',
+        encryptedKey: allData.key ?? '',
+        url: allData.url || null,
+      }],
+      activeProviderId: id,
+      activeModel: allData.model ?? '',
+    };
+    chrome.storage.local.set(newSchema, () => {
+      chrome.storage.local.remove(['url', 'key', 'model']);
+    });
+  });
 });
 
 // Register on startup
 chrome.runtime.onStartup.addListener(() => {
   console.log("Extension: Chrome started, ensuring context menus exist");
   registerContextMenus();
+
+  chrome.storage.local.get(null, (allData) => {
+    if (Array.isArray(allData.providers)) return;
+    if (!allData.url && !allData.key) return;
+    const id = crypto.randomUUID();
+    const newSchema = {
+      providers: [{
+        id,
+        name: 'My OpenAI Service',
+        type: 'openai-compatible',
+        encryptedKey: allData.key ?? '',
+        url: allData.url || null,
+      }],
+      activeProviderId: id,
+      activeModel: allData.model ?? '',
+    };
+    chrome.storage.local.set(newSchema, () => {
+      chrome.storage.local.remove(['url', 'key', 'model']);
+    });
+  });
 });
 
 // ============================================================================
@@ -1187,29 +1229,32 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         responded = true;
         try { sendResponse(payload); } catch (e) {}
       };
-      try {
-        const config = await chrome.storage.local.get(["url", "key", "model"]);
-        const storedUrl = config.url || "";
-        const storedKey = config.key || "";
-        const storedModel = config.model || "";
-        let decryptedKey = storedKey;
-        if (storedKey) {
-          try {
-            decryptedKey = await decryptApiKey(storedKey);
-          } catch (_) {
-            decryptedKey = storedKey;
-          }
+      chrome.storage.local.get(['providers', 'activeProviderId', 'activeModel'], async (data) => {
+        const providers = data.providers || [];
+        const activeProviderId = data.activeProviderId || '';
+        const activeModel = data.activeModel || '';
+        const activeProvider = providers.find((p) => p.id === activeProviderId);
+
+        if (!activeProvider) {
+          return reply({ providers, activeProviderId, activeModel, key: '', url: '' });
         }
+
+        let decryptedKey = '';
+        try {
+          decryptedKey = await decryptApiKey(activeProvider.encryptedKey);
+        } catch (e) {
+          return reply({ error: 'Failed to decrypt API key', providers, activeProviderId, activeModel });
+        }
+
         reply({
-          url: storedUrl,
+          providers,
+          activeProviderId,
+          activeModel,
+          providerType: activeProvider.type,
+          url: activeProvider.url || '',
           key: decryptedKey,
-          model: storedModel,
-          models: [],
-          pageContent: "",
         });
-      } catch (error) {
-        reply({ error: getUserFriendlyErrorMessage(error) });
-      }
+      });
     })();
     return true;
   } else if (request.action == "createChat") {
@@ -1307,6 +1352,18 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         });
       }
     });
+    return true;
+  } else if (request.action == "openSettings") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+      reply({ success: true });
+    })();
     return true;
   } else {
     sendResponse({});

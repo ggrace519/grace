@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'extractPageContent', 'getActiveTabPageContent', 'getActiveTabPageLinks', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -509,6 +509,7 @@ async function handleExtractPageContent(tabId) {
 const SIDE_PANEL_CONTEXT_TAB_KEY = "sidePanelContextTabId";
 // In-memory so getActiveTabPageContent can read it without awaiting storage (avoids message port timeout)
 let sidePanelContextTabIdMemory = null;
+let sidebarNavPort = null;
 
 /** Returns the tab id the side panel should use for context (memory, session, or current tab). */
 async function getContextTabId() {
@@ -1011,7 +1012,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   //  treats as a non-true return value and immediately closes the port.)
   (async () => {
     // Validate sender - allow certain actions without tab validation
-    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
+    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'getActiveTabPageLinks', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
     const needsTab = !actionsWithoutTab.includes(request.action);
 
     // For actions that need a tab, try to get it from the message or query active tab
@@ -1240,6 +1241,35 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         reply(result.data !== undefined ? { data: result.data } : { error: result.error || "No content" });
       } catch (error) {
         reply({ error: getUserFriendlyErrorMessage(error) });
+      }
+    })();
+    return true;
+  } else if (request.action == "getActiveTabPageLinks") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      try {
+        const tabId = await getContextTabId();
+        if (!tabId) { reply({ data: [] }); return; }
+        const tab = await chrome.tabs.get(tabId);
+        const url = tab && tab.url ? tab.url : "";
+        if (url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:")) {
+          reply({ data: [] });
+          return;
+        }
+        const result = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(tabId, { action: "getPageLinks" }, (response) => {
+            if (chrome.runtime.lastError) resolve({ data: [] });
+            else resolve(response || { data: [] });
+          });
+        });
+        reply(Array.isArray(result.data) ? { data: result.data } : { data: [] });
+      } catch (_) {
+        reply({ data: [] });
       }
     })();
     return true;
@@ -1497,6 +1527,14 @@ function safePortDisconnect(port) {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "sidebar-nav") {
+    sidebarNavPort = port;
+    port.onDisconnect.addListener(() => {
+      sidebarNavPort = null;
+    });
+    return;
+  }
+
   if (port.name === "chat-stream") {
     port.onMessage.addListener(async (msg) => {
       if (msg.action === "fetchChatCompletion") {
@@ -1679,4 +1717,24 @@ chrome.runtime.onConnect.addListener((port) => {
       }
     });
   }
+});
+
+// Navigation detection — push events to the sidebar via the sidebar-nav port
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!sidebarNavPort) return;
+  const url = tab.url || '';
+  if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('edge://') || url.startsWith('about:')) return;
+  if (sidePanelContextTabIdMemory != null && tabId !== sidePanelContextTabIdMemory) return;
+  safePortPost(sidebarNavPort, { type: 'navigation', tabId, title: tab.title || '', url });
+});
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  if (!sidebarNavPort) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab.url || '';
+    if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('edge://') || url.startsWith('about:')) return;
+    safePortPost(sidebarNavPort, { type: 'navigation', tabId, title: tab.title || '', url });
+  } catch (_) {}
 });

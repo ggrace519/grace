@@ -228,6 +228,21 @@ export const getActiveTabPageContent = async () => {
   }
 };
 
+/**
+ * Get same-origin links from the currently active browser tab.
+ * Returns up to 20 links: [{ href, text }]. Never rejects — returns { data: [] } on error.
+ */
+export const getPageLinks = async () => {
+  try {
+    const c = getChrome();
+    if (!c?.runtime?.sendMessage) return { data: [] };
+    const response = await sendMessageWithRetry({ action: 'getActiveTabPageLinks' });
+    return { data: Array.isArray(response?.data) ? response.data : [] };
+  } catch (_) {
+    return { data: [] };
+  }
+};
+
 export const generateOpenAIChatCompletion = async (
   api_key = "",
   body = {},
@@ -299,4 +314,23 @@ export const generateOpenAIChatCompletion = async (
     // Resolve immediately with the stream
     resolve([response, { abort: () => { port.disconnect(); } }]);
   });
+};
+
+/**
+ * Opens a long-lived port to receive navigation events pushed by the background.
+ * Call port.disconnect() when the component unmounts.
+ * onNav is called with { tabId, title, url } on each navigation.
+ */
+export const connectNavPort = (onNav) => {
+  const c = getChrome();
+  if (!c?.runtime?.connect) return null;
+  try {
+    const port = c.runtime.connect({ name: 'sidebar-nav' });
+    port.onMessage.addListener((msg) => {
+      if (msg.type === 'navigation') onNav(msg);
+    });
+    return port;
+  } catch (_) {
+    return null;
+  }
 };

@@ -1,6 +1,6 @@
 /* global chrome */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getModels, generateOpenAIChatCompletion } from './index.js';
+import { getModels, generateOpenAIChatCompletion, getPageLinks } from './index.js';
 
 describe('apis', () => {
   beforeEach(() => {
@@ -66,6 +66,37 @@ describe('apis', () => {
       });
       const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
       expect(result).toEqual({});
+    });
+  });
+
+  describe('getPageLinks', () => {
+    it('returns { data: [] } when Chrome API is unavailable', async () => {
+      vi.stubGlobal('chrome', undefined);
+      const result = await getPageLinks();
+      expect(result).toEqual({ data: [] });
+    });
+
+    it('returns { data: [] } when chrome.runtime.sendMessage is missing', async () => {
+      vi.stubGlobal('chrome', { runtime: { id: 'x' }, storage: {} });
+      const result = await getPageLinks();
+      expect(result).toEqual({ data: [] });
+    });
+
+    it('returns { data: links } on success', async () => {
+      const mockLinks = [{ href: 'https://example.com/page', text: 'Example page link' }];
+      chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
+        cb({ data: mockLinks });
+      });
+      const result = await getPageLinks();
+      expect(result).toEqual({ data: mockLinks });
+    });
+
+    it('returns { data: [] } when response data is not an array', async () => {
+      chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
+        cb({ data: null });
+      });
+      const result = await getPageLinks();
+      expect(result).toEqual({ data: [] });
     });
   });
 

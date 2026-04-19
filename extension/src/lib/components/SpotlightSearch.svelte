@@ -955,7 +955,7 @@ End of page content.
   };
 
   async function addNewPageContext() {
-    if (!pendingNavigation) return;
+    if (!pendingNavigation || isStreaming) return;
     const nav = pendingNavigation;
     pendingNavigation = null;
     isStreaming = true;
@@ -969,12 +969,9 @@ End of page content.
         ...conversationHistory,
         { role: 'user', content: contextNote }
       ];
-      conversationHistory = [
-        ...conversationHistory,
-        { role: 'assistant', content: `Got it — I now have context from **${nav.title || nav.url}**.` }
-      ];
     } catch (_) {
-      // ignore
+      // Restore banner so user can retry
+      pendingNavigation = nav;
     } finally {
       isStreaming = false;
     }
@@ -1407,7 +1404,12 @@ End of page content.
             }
           } catch (_) {}
 
+          let skipFirstNav = true;
           navPort = connectNavPort((nav: { tabId: number; title: string; url: string }) => {
+            if (skipFirstNav) {
+              skipFirstNav = false;
+              return;
+            }
             pendingNavigation = nav;
           });
         }
@@ -1951,6 +1953,7 @@ End of page content.
             </span>
             <button
               on:click={addNewPageContext}
+              disabled={isStreaming}
               style="background:#2a4a2a;border:none;color:#4ade80;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0"
             >Add to conversation</button>
             <button

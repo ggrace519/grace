@@ -1151,7 +1151,7 @@
             conversationHistory = [
               {
                 role: "system",
-                content: "You are a helpful assistant with access to web search. For questions about current events, recent news, or information that may have changed after your training data, use web search to provide accurate, up-to-date information. Cite sources when using web search results. You can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your responses more readable and well-structured.",
+                content: buildSystemPrompt({ mode: 'spotlight' }),
               },
               {
                 role: "user",

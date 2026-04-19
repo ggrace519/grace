@@ -46,3 +46,9 @@ export function migrateStorageIfNeeded(raw: Record<string, any>): StorageSchema 
     activeModel: raw.model ?? '',
   };
 }
+
+export interface AppearanceSettings {
+  theme: 'dark' | 'light' | 'system';
+  density: 'compact' | 'normal' | 'comfortable';
+  accentColor: string;
+}

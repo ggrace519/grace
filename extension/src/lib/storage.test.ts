@@ -6,6 +6,7 @@ import {
   type Provider,
   type StorageSchema,
 } from './storage';
+import type { AppearanceSettings } from './storage';
 
 describe('migrateStorageIfNeeded', () => {
   it('returns null when no old schema present and no providers', () => {
@@ -69,5 +70,22 @@ describe('getActiveProvider', () => {
 
   it('returns undefined when no match', () => {
     expect(getActiveProvider([], 'x')).toBeUndefined();
+  });
+});
+
+describe('AppearanceSettings', () => {
+  it('has correct theme union type values', () => {
+    const themes: AppearanceSettings['theme'][] = ['dark', 'light', 'system'];
+    expect(themes).toHaveLength(3);
+  });
+
+  it('has correct density union type values', () => {
+    const densities: AppearanceSettings['density'][] = ['compact', 'normal', 'comfortable'];
+    expect(densities).toHaveLength(3);
+  });
+
+  it('accentColor is a string', () => {
+    const s: AppearanceSettings = { theme: 'dark', density: 'normal', accentColor: '#4ade80' };
+    expect(typeof s.accentColor).toBe('string');
   });
 });

@@ -24,15 +24,22 @@ describe('buildSystemPrompt', () => {
     expect(contentEnd - contentStart).toBeLessThanOrEqual(PAGE_CONTENT_BUDGET + 30);
   });
 
-  it('includes link summaries block when provided', () => {
+  it('includes link summaries block when provided alongside page content', () => {
     const links = [
       { href: 'https://example.com/a', text: 'Article A' },
       { href: 'https://example.com/b', text: 'Article B' },
     ];
-    const result = buildSystemPrompt({ mode: 'sidebar', linkSummaries: links });
+    const result = buildSystemPrompt({ mode: 'sidebar', pageContent: 'Some page content', linkSummaries: links });
     expect(result).toContain('Related pages');
     expect(result).toContain('Article A');
     expect(result).toContain('https://example.com/a');
+  });
+
+  it('omits link summaries block when page content is absent', () => {
+    const links = [{ href: 'https://example.com/a', text: 'Article A' }];
+    expect(buildSystemPrompt({ mode: 'sidebar', pageContent: '', linkSummaries: links })).not.toContain('Related pages');
+    expect(buildSystemPrompt({ mode: 'sidebar', pageContent: '   ', linkSummaries: links })).not.toContain('Related pages');
+    expect(buildSystemPrompt({ mode: 'sidebar', linkSummaries: links })).not.toContain('Related pages');
   });
 
   it('respects link summaries budget', () => {
@@ -40,7 +47,7 @@ describe('buildSystemPrompt', () => {
       href: `https://example.com/page-${i}`,
       text: 'x'.repeat(80),
     }));
-    const result = buildSystemPrompt({ mode: 'sidebar', linkSummaries: links });
+    const result = buildSystemPrompt({ mode: 'sidebar', pageContent: 'Some page content', linkSummaries: links });
     const linksStart = result.indexOf('Related pages');
     const linksEnd = result.lastIndexOf('---');
     expect(linksEnd - linksStart).toBeLessThanOrEqual(LINK_SUMMARIES_BUDGET + 200);

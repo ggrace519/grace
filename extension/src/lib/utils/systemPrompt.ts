@@ -42,7 +42,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
     prompt += `\n\n---\nPage content:\n---\n${content}\n---\nEnd of page content.\n---`;
   }
 
-  if (linkSummaries && linkSummaries.length > 0) {
+  if (trimmedContent.length > 0 && linkSummaries && linkSummaries.length > 0) {
     const header = '\n\n---\nRelated pages on this site (you may proactively surface these if relevant to the conversation):\n';
     const footer = '\n---';
     let linksContent = '';

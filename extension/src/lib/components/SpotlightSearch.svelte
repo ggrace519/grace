@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent, getSidebarInit, pingSidebarWake } from "../apis";
+  import { onMount, onDestroy } from "svelte";
+  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent, getPageLinks, connectNavPort, getSidebarInit, pingSidebarWake } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
 
   // Helper for user-friendly error messages
@@ -41,6 +41,8 @@
   let isStreaming = false; // ENHANCEMENT: Tracks if response is currently streaming
   let errorMessage = ""; // ENHANCEMENT: Error message for rate limits, etc.
   let showError = false; // ENHANCEMENT: Controls error message visibility
+  let navPort: any = null;
+  let pendingNavigation: { title: string; url: string; tabId: number } | null = null;
 
   const closeResponseModal = () => {
     showResponse = false;
@@ -947,10 +949,36 @@ End of page content.
   // These errors occur when the extension is reloaded and are not actual errors
   const isContextInvalidatedError = (error: any): boolean => {
     const errorMsg = error?.message || String(error);
-    return errorMsg.includes("Extension context invalidated") || 
+    return errorMsg.includes("Extension context invalidated") ||
            errorMsg.includes("Cannot read properties of undefined") ||
            errorMsg.includes("Chrome APIs not available");
   };
+
+  async function addNewPageContext() {
+    if (!pendingNavigation) return;
+    const nav = pendingNavigation;
+    pendingNavigation = null;
+    isStreaming = true;
+    try {
+      const pageResult = await getActiveTabPageContent();
+      const content = pageResult?.data?.trim() || '';
+      const contextNote = content.length > 0
+        ? `[Context update: User navigated to "${nav.title}" (${nav.url}). New page content:\n\n${content.substring(0, 8000)}${content.length > 8000 ? '\n\n[Truncated.]' : ''}]`
+        : `[Context update: User navigated to "${nav.title}" (${nav.url}). Page content was not available.]`;
+      conversationHistory = [
+        ...conversationHistory,
+        { role: 'user', content: contextNote }
+      ];
+      conversationHistory = [
+        ...conversationHistory,
+        { role: 'assistant', content: `Got it — I now have context from **${nav.title || nav.url}**.` }
+      ];
+    } catch (_) {
+      // ignore
+    } finally {
+      isStreaming = false;
+    }
+  }
 
   onMount(() => {
     // Only initialize in main frame to avoid duplicate processing when all_frames: true
@@ -1378,6 +1406,10 @@ End of page content.
               sidebarPageContext = pageResult.data;
             }
           } catch (_) {}
+
+          navPort = connectNavPort((nav: { tabId: number; title: string; url: string }) => {
+            pendingNavigation = nav;
+          });
         }
 
         try {
@@ -1400,6 +1432,13 @@ End of page content.
       window.removeEventListener("open-webui-explain-text", handleExplainTextEvent as EventListener);
       delete window.openWebUIToggleSearch;
     };
+  });
+
+  onDestroy(() => {
+    if (navPort) {
+      try { navPort.disconnect(); } catch (_) {}
+      navPort = null;
+    }
   });
 </script>
 
@@ -1901,6 +1940,24 @@ End of page content.
               </svg>
               <p class="tlwd-text-base tlwd-text-red-300">{errorMessage}</p>
             </div>
+          </div>
+        {/if}
+
+        <!-- Navigation Banner -->
+        {#if sidebarMode && pendingNavigation}
+          <div style="background:#1a2a1a;border:1px solid #2a4a2a;border-radius:8px;padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <span style="color:#aaa;font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              New page: <strong style="color:#eee">{pendingNavigation.title || pendingNavigation.url}</strong>
+            </span>
+            <button
+              on:click={addNewPageContext}
+              style="background:#2a4a2a;border:none;color:#4ade80;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0"
+            >Add to conversation</button>
+            <button
+              on:click={() => pendingNavigation = null}
+              style="background:transparent;border:none;color:#555;cursor:pointer;font-size:16px;line-height:1;flex-shrink:0;padding:0 2px"
+              aria-label="Dismiss"
+            >×</button>
           </div>
         {/if}
 

@@ -509,6 +509,7 @@ async function handleExtractPageContent(tabId) {
 const SIDE_PANEL_CONTEXT_TAB_KEY = "sidePanelContextTabId";
 // In-memory so getActiveTabPageContent can read it without awaiting storage (avoids message port timeout)
 let sidePanelContextTabIdMemory = null;
+let sidebarNavPort = null;
 
 /** Returns the tab id the side panel should use for context (memory, session, or current tab). */
 async function getContextTabId() {
@@ -1526,6 +1527,14 @@ function safePortDisconnect(port) {
 }
 
 chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "sidebar-nav") {
+    sidebarNavPort = port;
+    port.onDisconnect.addListener(() => {
+      sidebarNavPort = null;
+    });
+    return;
+  }
+
   if (port.name === "chat-stream") {
     port.onMessage.addListener(async (msg) => {
       if (msg.action === "fetchChatCompletion") {
@@ -1708,4 +1717,24 @@ chrome.runtime.onConnect.addListener((port) => {
       }
     });
   }
+});
+
+// Navigation detection — push events to the sidebar via the sidebar-nav port
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!sidebarNavPort) return;
+  const url = tab.url || '';
+  if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('edge://') || url.startsWith('about:')) return;
+  if (sidePanelContextTabIdMemory != null && tabId !== sidePanelContextTabIdMemory) return;
+  safePortPost(sidebarNavPort, { type: 'navigation', tabId, title: tab.title || '', url });
+});
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  if (!sidebarNavPort) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab.url || '';
+    if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('edge://') || url.startsWith('about:')) return;
+    safePortPost(sidebarNavPort, { type: 'navigation', tabId, title: tab.title || '', url });
+  } catch (_) {}
 });

@@ -57,5 +57,3 @@ if (document.readyState === "loading") {
   console.log("Sidebar: DOM already loaded, initializing");
   initSidebar();
 }
-
-export default initSidebar();

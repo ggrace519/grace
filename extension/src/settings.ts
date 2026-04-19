@@ -1,32 +1,26 @@
-// ============================================================================
-// Settings Entry Point
-// ============================================================================
-// This file serves as the entry point for the Chrome Extension Settings page.
-// ============================================================================
-
 import "./app.css";
 import Settings from "./lib/components/Settings.svelte";
 
 function initSettings(): InstanceType<typeof Settings> | null {
-  const targetElement = document.getElementById("settings-app");
+  if ((window as any).__grace_settings_initialized) return null;
 
+  const targetElement = document.getElementById("settings-app");
   if (targetElement) {
-    const app = new Settings({
-      target: targetElement,
-    });
+    if ((targetElement as any).__svelte_app) {
+      return (targetElement as any).__svelte_app as InstanceType<typeof Settings>;
+    }
+    const app = new Settings({ target: targetElement });
+    (targetElement as any).__svelte_app = app;
+    (window as any).__grace_settings_initialized = true;
     return app;
   } else {
-    console.warn("Settings app target element not found, retrying...");
     setTimeout(initSettings, 100);
     return null;
   }
 }
 
-// Wait for DOM to be ready
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", initSettings);
 } else {
   initSettings();
 }
-
-export default initSettings();

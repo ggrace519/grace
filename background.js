@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -1279,60 +1279,6 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
           key: decryptedKey,
         });
       });
-    })();
-    return true;
-  } else if (request.action == "createChat") {
-    (async () => {
-      if (!isValidUrl(request.url)) {
-        sendResponse({ error: "Invalid URL format" });
-        return;
-      }
-
-      let decryptedKey = request.api_key;
-      if (request.api_key) {
-        try {
-          decryptedKey = await decryptApiKey(request.api_key);
-        } catch (error) {
-          console.error("Extension: Failed to decrypt API key for createChat:", error);
-        }
-      }
-
-      if (!request.body || typeof request.body !== 'object') {
-        sendResponse({ error: "Invalid request body" });
-        return;
-      }
-
-      const apiUrl = `${request.url}/api/chats`;
-      if (!isValidUrl(apiUrl)) {
-        sendResponse({ error: "Invalid API URL" });
-        return;
-      }
-
-      try {
-        const res = await safeFetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(decryptedKey && { Authorization: `Bearer ${decryptedKey}` }),
-          },
-          body: JSON.stringify(request.body),
-        });
-
-        validateCSPHeaders(res);
-
-        if (!res.ok) {
-          const errorText = await res.text();
-          const friendlyError = getUserFriendlyErrorMessage({ message: `HTTP ${res.status}: ${errorText}` });
-          sendResponse({ error: friendlyError });
-          return;
-        }
-
-        const data = await res.json();
-        sendResponse({ data: data });
-      } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
-      }
     })();
     return true;
   } else if (request.action == "openSidePanel") {

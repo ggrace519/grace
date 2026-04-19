@@ -886,118 +886,6 @@ End of page content.
     }
   };
 
-  // ========================================================================
-  // ENHANCEMENT: Continue in OpenWebUI Feature
-  // ========================================================================
-  // Transfers the current conversation from the extension to the full OpenWebUI
-  // interface. Creates a new chat via API and opens it in a new tab. Includes
-  // fallback logic if API call fails.
-  // ========================================================================
-  // Function to continue conversation in OpenWebUI
-  const continueInOpenWebUI = async () => {
-    if (!url || conversationHistory.length === 0) {
-      console.warn("Extension: No conversation to continue or URL not configured");
-      return;
-    }
-
-    if (!isChromeAPIAvailable()) {
-      console.debug("Extension: Chrome APIs not available - cannot continue in OpenWebUI");
-      // Fallback: just open the URL
-      window.open(url, "_blank");
-      return;
-    }
-
-    try {
-      // Get current config (decrypt API key if needed)
-      let currentUrl = url;
-      let currentKey = key;
-      
-      try {
-        const storedConfig = (await chrome.storage.local.get(["url", "key"])) as StoredConfig;
-        if (storedConfig.url) currentUrl = storedConfig.url;
-        if (storedConfig.key) {
-          // Decrypt API key if needed
-              try {
-            const decryptionResponse = await chrome.runtime.sendMessage({
-              action: "decryptApiKey",
-              encryptedApiKey: storedConfig.key
-            });
-            if (!decryptionResponse.error) {
-              currentKey = decryptionResponse.decrypted;
-            } else {
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            }
-          } catch (error) {
-            if (isContextInvalidatedError(error)) {
-              // Expected when extension is reloaded - use debug level
-              console.debug("Extension: Chrome runtime API not available");
-            }
-            currentKey = storedConfig.key; // Use as-is (backward compatibility)
-          }
-        }
-      } catch (error) {
-        if (isContextInvalidatedError(error)) {
-          // Expected when extension is reloaded - use debug level
-          console.debug("Extension: Chrome storage API not available");
-        } else {
-          console.error("Extension: Error getting config:", error);
-        }
-      }
-
-      // Filter out system messages and format conversation for OpenWebUI
-      const messages = conversationHistory.filter(m => m.role !== "system");
-      
-      if (messages.length === 0) {
-        console.warn("Extension: No messages to send");
-        return;
-      }
-
-      // Try to create a conversation via OpenWebUI API (proxied through background script)
-      try {
-        const createChatResponse = await chrome.runtime.sendMessage({
-          action: "createChat",
-          url: currentUrl,
-          api_key: currentKey,
-          body: {
-            title: messages[0]?.content?.substring(0, 50) || "Extension Conversation",
-            messages: messages,
-          },
-        });
-
-        if (createChatResponse.data && createChatResponse.data.id) {
-          // Open the conversation in OpenWebUI
-          window.open(`${currentUrl}/chat/${createChatResponse.data.id}`, "_blank");
-          return;
-        } else if (createChatResponse.error) {
-          console.log("Extension: Could not create chat via API, trying URL parameters:", createChatResponse.error);
-        }
-      } catch (apiError) {
-        console.log("Extension: Could not create chat via API, trying URL parameters:", apiError);
-      }
-
-      // Fallback: Open with first message as query parameter
-      // OpenWebUI will create a new conversation with this message
-      const firstUserMessage = messages.find(m => m.role === "user");
-      if (firstUserMessage) {
-        const query = encodeURIComponent(firstUserMessage.content);
-        window.open(`${currentUrl}/?q=${query}`, "_blank");
-      } else {
-        // Last resort: just open OpenWebUI
-        window.open(currentUrl, "_blank");
-      }
-    } catch (error) {
-      console.error("Extension: Error continuing in OpenWebUI:", error);
-      // Fallback: just open the base URL
-      try {
-        const storedConfig = await chrome.storage.local.get(["url"]);
-        if (storedConfig.url) {
-          window.open(storedConfig.url as string, "_blank");
-        }
-      } catch (fallbackError) {
-        console.error("Extension: Could not open OpenWebUI:", fallbackError);
-      }
-    }
-  };
 
   // ========================================================================
   // ENHANCEMENT: Follow-up Questions Feature
@@ -2050,15 +1938,6 @@ End of page content.
           >
             Configure
           </button>
-          {#if conversationHistory.length > 0}
-            <button
-              class="tlwd-text-xs tlwd-text-blue-400 hover:tlwd-text-blue-300"
-              on:click={continueInOpenWebUI}
-              type="button"
-            >
-              Open in OpenWebUI
-            </button>
-          {/if}
         </div>
       </div>
     {/if}
@@ -2573,28 +2452,6 @@ End of page content.
               Press Escape to close
             </div>
             <div class="tlwd-flex tlwd-items-center tlwd-gap-3">
-              <button
-                class="tlwd-text-sm tlwd-text-blue-400 hover:tlwd-text-blue-300 disabled:tlwd-text-neutral-500 disabled:tlwd-opacity-50 disabled:tlwd-cursor-not-allowed tlwd-cursor-pointer tlwd-outline-none tlwd-border-none tlwd-bg-transparent tlwd-transition-colors tlwd-flex tlwd-items-center tlwd-gap-1"
-                on:click={continueInOpenWebUI}
-                type="button"
-                disabled={conversationHistory.length === 0}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width={2}
-                  stroke="currentColor"
-                  class="tlwd-size-4"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
-                  />
-                </svg>
-                Continue in OpenWebUI
-              </button>
               <button
                 class="tlwd-text-sm tlwd-text-neutral-300 hover:tlwd-text-neutral-100 tlwd-cursor-pointer tlwd-outline-none tlwd-border-none tlwd-bg-transparent tlwd-transition-colors"
                 on:click={() => {

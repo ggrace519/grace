@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'getAppearance', 'saveAppearance'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -1011,7 +1011,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   //  treats as a non-true return value and immediately closes the port.)
   (async () => {
     // Validate sender - allow certain actions without tab validation
-    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey'];
+    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'getAppearance', 'saveAppearance'];
     const needsTab = !actionsWithoutTab.includes(request.action);
 
     // For actions that need a tab, try to get it from the message or query active tab
@@ -1389,6 +1389,34 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       reply({ success: true });
     })();
     return true;
+  } else if (request.action === 'getAppearance') {
+    (() => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.sync.get(['appearance'], (data) => {
+        reply({ appearance: data.appearance ?? null });
+      });
+    })();
+    return true;
+
+  } else if (request.action === 'saveAppearance') {
+    (() => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.sync.set({ appearance: request.appearance }, () => {
+        reply({ ok: true });
+      });
+    })();
+    return true;
+
   } else if (request.action == "saveProvider") {
     (async () => {
       let responded = false;

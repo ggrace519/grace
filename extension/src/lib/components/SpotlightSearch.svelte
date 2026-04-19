@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent, getPageLinks, connectNavPort, getSidebarInit, pingSidebarWake } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
+  import { buildSystemPrompt } from '../utils/systemPrompt';
 
   // Helper for user-friendly error messages
   function getUserFriendlyErrorMessage(error: any): string {
@@ -43,6 +44,7 @@
   let showError = false; // ENHANCEMENT: Controls error message visibility
   let navPort: any = null;
   let pendingNavigation: { title: string; url: string; tabId: number } | null = null;
+  let pageLinks: Array<{ href: string; text: string }> = [];
 
   const closeResponseModal = () => {
     showResponse = false;
@@ -123,10 +125,10 @@
     conversationHistory = [...conversationHistory, { role: "user", content: userMessage }];
 
     // When this is the first message in the sidebar, include the current page content as context
-    let systemContent = "You are a helpful assistant. Provide clear and concise responses. Use markdown formatting when appropriate.";
     const isFirstMessage = conversationHistory.length === 1;
+    let pageContext = '';
     if (sidebarMode && isFirstMessage) {
-      let pageContext = sidebarPageContext;
+      pageContext = sidebarPageContext || '';
       if (!pageContext || pageContext.trim().length === 0) {
         // Ping to wake worker before getting page content
         await pingSidebarWake();
@@ -142,22 +144,12 @@
           console.debug("Extension: Could not get page context for sidebar:", e);
         }
       }
-      if (pageContext && pageContext.trim().length > 0) {
-        const maxPageChars = 12000;
-        const truncated = pageContext.length > maxPageChars
-          ? pageContext.substring(0, maxPageChars) + "\n\n[Content truncated for length.]"
-          : pageContext;
-        systemContent = `You are a helpful AI assistant in the Grace sidebar. The user can have any conversation they want. Below is the extracted text from the web page they currently have open—use it as context when their questions relate to the page (e.g. summarizing, explaining, or tasks based on it). If they ask about something not in the content, answer from your general knowledge and say so when it's not from the page. When they do refer to the page, base your answer on what is actually there. Keep a clear, friendly tone and use markdown when it helps. You only respond in the panel; you cannot interact with the browser.
-
----
-Page content:
----
-${truncated}
----
-End of page content.
----`;
-      }
     }
+    const systemContent = buildSystemPrompt({
+      mode: sidebarMode ? 'sidebar' : 'spotlight',
+      pageContent: pageContext,
+      linkSummaries: sidebarMode && isFirstMessage ? pageLinks : [],
+    });
 
     // Build messages with system prompt
     const messages = [
@@ -325,7 +317,7 @@ End of page content.
     conversationHistory = [
       {
         role: "system",
-        content: "You are a helpful assistant that summarizes web page content. Ignore navigation menus, advertisements, cookie notices, footers, headers, and other non-content elements. Focus on the main article or content of the page. Provide a clear, concise summary. You can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your response more readable and well-structured."
+        content: buildSystemPrompt({ mode: 'summarize' })
       },
       {
         role: "user",
@@ -530,7 +522,7 @@ End of page content.
     conversationHistory = [
       {
         role: "system",
-        content: `I need help understanding a concept or term mentioned in this text: ${selectedText}\n\nPlease explain this term/concept in simple, clear language. Provide a definition and offer examples to illustrate your point.\n\nIf there are any related ideas or concepts that I should know about, please summarize those as well.\n\nAdditionally, if you can provide any context or background information that might be helpful for understanding the term/concept, please do so. You have access to web search - use it to find current information, recent developments, or additional context that would help explain the concept better.\n\nYou can use markdown formatting (headers, lists, code blocks, bold, italic, etc.) to make your explanation more readable and well-structured.`
+        content: buildSystemPrompt({ mode: 'explain' })
       },
       {
         role: "user",
@@ -1404,6 +1396,16 @@ End of page content.
             }
           } catch (_) {}
 
+          // Fetch page links for Future View (non-blocking — failure returns empty array)
+          try {
+            const linksResult = await getPageLinks();
+            if (Array.isArray(linksResult?.data)) {
+              pageLinks = linksResult.data;
+            }
+          } catch (_) {
+            pageLinks = [];
+          }
+
           let skipFirstNav = true;
           navPort = connectNavPort((nav: { tabId: number; title: string; url: string }) => {
             if (skipFirstNav) {
@@ -1528,6 +1530,27 @@ End of page content.
                   </div>
                 {/each}
               </div>
+
+              <!-- Related on this site (Future View) -->
+              {#if sidebarMode && pageLinks.length > 0}
+                <div style="margin-top:8px">
+                  <p style="color:var(--grace-text-faint);font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Related on this site</p>
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    {#each pageLinks.slice(0, 5) as link}
+                      <a
+                        href={link.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--grace-bg-input);border:1px solid var(--grace-border);border-radius:6px;text-decoration:none;color:var(--grace-text-muted);font-size:11px;overflow:hidden"
+                        title={link.href}
+                      >
+                        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{link.text}</span>
+                        <span style="color:var(--grace-text-faint);font-size:9px;margin-left:auto;flex-shrink:0">↗</span>
+                      </a>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
           {/if}
 

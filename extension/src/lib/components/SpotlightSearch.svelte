@@ -1444,6 +1444,52 @@ End of page content.
       {:else}
         <!-- Chat Interface - Uses conversationHistory -->
         <div class="tlwd-space-y-4" bind:this={responseContainer}>
+
+          <!-- Welcome state: shown when no conversation has started -->
+          {#if conversationHistory.filter(m => m.role !== 'system').length === 0 && !isStreaming}
+            <div class="tlwd-flex tlwd-flex-col tlwd-gap-6 tlwd-pt-4">
+              <!-- Greeting -->
+              <div>
+                <h2 class="tlwd-text-xl tlwd-font-semibold tlwd-text-white tlwd-mb-1">How can I help?</h2>
+                <p class="tlwd-text-sm tlwd-text-gray-400">Ask anything. Grace has context from the current page on your first message.</p>
+              </div>
+
+              <!-- Capabilities -->
+              <div class="tlwd-grid tlwd-grid-cols-1 tlwd-gap-2">
+                {#each [
+                  { icon: '📄', title: 'Summarize this page', prompt: 'Summarize the main points of this page.' },
+                  { icon: '💡', title: 'Explain something', prompt: 'Explain the key concept on this page in simple terms.' },
+                  { icon: '✏️', title: 'Rewrite or improve', prompt: 'Rewrite the main content of this page to be clearer and more concise.' },
+                  { icon: '❓', title: 'Ask a question', prompt: 'What are the most important takeaways from this page?' },
+                ] as suggestion}
+                  <button
+                    type="button"
+                    class="tlwd-flex tlwd-items-center tlwd-gap-3 tlwd-px-4 tlwd-py-3 tlwd-bg-gray-800 hover:tlwd-bg-gray-700 tlwd-rounded-xl tlwd-text-left tlwd-transition-colors tlwd-border tlwd-border-gray-700 hover:tlwd-border-gray-500 tlwd-w-full"
+                    on:click={() => { searchValue = suggestion.prompt; }}
+                  >
+                    <span class="tlwd-text-lg tlwd-leading-none">{suggestion.icon}</span>
+                    <span class="tlwd-text-sm tlwd-text-gray-200">{suggestion.title}</span>
+                  </button>
+                {/each}
+              </div>
+
+              <!-- Tips -->
+              <div class="tlwd-space-y-2 tlwd-border-t tlwd-border-gray-800 tlwd-pt-4">
+                <p class="tlwd-text-xs tlwd-text-gray-500 tlwd-font-medium tlwd-uppercase tlwd-tracking-wide">Tips</p>
+                {#each [
+                  { keys: 'Ctrl+Shift+L', desc: 'Toggle this sidebar from any tab' },
+                  { keys: 'Ctrl+Shift+K', desc: 'Open the quick spotlight search' },
+                  { keys: 'Ctrl+Shift+Enter', desc: 'Send selected text for an instant reply' },
+                ] as tip}
+                  <div class="tlwd-flex tlwd-items-center tlwd-gap-3">
+                    <kbd class="tlwd-px-1.5 tlwd-py-0.5 tlwd-bg-gray-800 tlwd-border tlwd-border-gray-600 tlwd-rounded tlwd-text-xs tlwd-text-gray-300 tlwd-whitespace-nowrap">{tip.keys}</kbd>
+                    <span class="tlwd-text-xs tlwd-text-gray-500">{tip.desc}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
           {#each conversationHistory as msg}
             {#if msg.role !== 'system'}
               <div class="tlwd-flex" class:tlwd-justify-end={msg.role === 'user'}>

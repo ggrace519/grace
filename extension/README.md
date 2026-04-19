@@ -1,71 +1,53 @@
-# Open WebUI Extension - Svelte App
+# Grace — Svelte App
 
-This is the Svelte application component of the Open WebUI Chrome Extension.
+The Svelte application bundle for the Grace Chrome extension.
 
-## Development
+## Commands
 
-### Prerequisites
-- Node.js 18+
-- Chrome browser for testing
-
-### Commands
+Run from this directory (`extension/`):
 
 ```bash
-# Install dependencies
-npm install
-
-# Run dev server (opens on port 5173)
-npm run dev
-
-# Build for production
-npm run build
-
-# Run tests
-npm test
-
-# Run tests with coverage
-npm run test:coverage
-
-# Type check
-npm run check
-```
-
-### Project Structure
-
-```
-extension/
-├── src/
-│   ├── lib/
-│   │   ├── apis/          # API utility functions
-│   │   ├── components/    # Svelte components
-│   │   └── utils/         # Helper utilities
-│   ├── App.svelte         # Root component
-│   ├── main.ts            # Entry point
-│   └── app.css            # Global styles
+npm install          # Install dependencies
+npm run dev          # Vite dev server on port 5173
+npm run build        # Build to dist/ (main app + content IIFE)
+npm run check        # Svelte type checking
+npm test             # Vitest unit tests
+npm run test:watch   # Watch mode
+npm run test:coverage  # With coverage report
 ```
 
 ## Build Output
 
-The build outputs to `extension/dist/`. This directory is git-ignored - to rebuild:
+`dist/` is git-ignored. After `npm run build`:
 
-```bash
-npm run build
+| File | Description |
+|------|-------------|
+| `dist/main.js` | In-page overlay bundle |
+| `dist/sidebar.js` | Side panel bundle |
+| `dist/chunk.js` | Shared chunk |
+| `dist/style.css` | Compiled styles |
+| `dist/index.html` | Overlay HTML |
+| `dist/sidebar.html` | Side panel HTML |
+| `dist/main-content.js` | IIFE bundle loaded by manifest content script |
+
+## Project Structure
+
+```
+src/
+├── main.ts            # In-page overlay entry
+├── sidebar.ts         # Side panel entry (sidebarMode: true)
+├── settings.ts        # Settings page entry
+├── App.svelte         # Root component
+├── app.css            # Global styles + Grace design tokens
+├── global.d.ts        # Window interface extensions
+└── lib/
+    ├── appearance.ts  # Theme/density/accent logic
+    ├── storage.ts     # Storage type definitions
+    ├── apis/          # Chrome message API helpers
+    ├── components/    # Svelte UI components
+    └── utils/         # Stream parsing, markdown rendering
 ```
 
-## Testing
+## Tests
 
-Tests use Vitest with a Node environment. Test files are located at `src/**/*.test.{js,ts}`.
-
-```bash
-npm test                    # Run tests once
-npm run test:watch         # Watch mode
-npm run test:coverage      # With coverage report
-```
-
-## Type Checking
-
-```bash
-npm run check
-```
-
-This uses `svelte-check` with the TS configuration in `tsconfig.json`.
+Tests use Vitest with jsdom. Test files: `src/**/*.test.{js,ts}`.

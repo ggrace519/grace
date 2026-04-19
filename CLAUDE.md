@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Chrome extension for Open WebUI that provides a spotlight-style search interface for quick AI interactions. The extension connects to a local or remote Open WebUI instance (running Ollama or other LLM backends) and allows users to:
+Grace is a standalone Chrome extension (Browser Integrated Conversation Engine) that connects to any OpenAI-compatible backend and allows users to:
 
 - Get AI responses directly in input fields via keyboard shortcuts
 - Open a persistent sidebar panel for AI chat (first message can include the current tab’s page content as context)
 - Extract and summarize page content
 - Get explanations for selected text
 - Maintain conversation history with follow-up questions
+- Customize appearance (theme, density, accent color) via the Settings page
 
 ## Architecture
 

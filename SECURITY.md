@@ -1,143 +1,122 @@
-# Security Review - Open WebUI Extension
-
-## Security Analysis Date
-2024-12-19
+# Security — Grace
 
 ## Overview
-This document outlines security vulnerabilities found and fixes applied to the Open WebUI Chrome Extension.
 
-## Vulnerabilities Found & Fixed
+Grace is a Chrome extension (Manifest V3) that calls user-configured AI backends. This document describes the security model, implemented protections, and known considerations.
 
-### 1. ✅ URL Validation (SSRF Protection)
-**Issue**: User-provided URLs were not validated, allowing potential SSRF attacks.
-**Risk**: High - Could allow attackers to make requests to internal services.
-**Fix**: Added URL validation to ensure only HTTP/HTTPS URLs are accepted and prevent localhost/internal IP access if needed.
+---
 
-### 2. ✅ API Key Storage & Encryption
-**Issue**: API keys stored in localStorage as fallback (less secure than chrome.storage).
-**Risk**: Medium - localStorage is accessible to all scripts on the page.
-**Fix**: 
-- Removed localStorage fallback, using only chrome.storage.local which is more secure
-- **Added AES-256-GCM encryption** for API keys using Web Crypto API
-- Encryption key derived from extension ID using PBKDF2 (100,000 iterations)
-- Each extension installation has a unique encryption key
-- Backward compatible with existing unencrypted keys
+## API Key Storage
 
-### 3. ✅ Input Sanitization
-**Issue**: User inputs sent directly to API without validation.
-**Risk**: Medium - Could allow injection attacks.
-**Fix**: Added input validation and sanitization before sending to API.
+**Risk**: API keys stored in browser storage are visible to anyone with DevTools access to the extension.
 
-### 4. ✅ Message Action Validation
-**Issue**: Background script accepts any action without validation.
-**Risk**: Medium - Could allow unauthorized actions.
-**Fix**: Added strict action validation in background script.
+**Mitigation**: Keys are encrypted with **AES-256-GCM** before being written to `chrome.storage.local`.
 
-### 5. ✅ XSS Protection
-**Status**: ✅ Safe - Using Svelte's built-in XSS protection (text interpolation, not innerHTML).
+- Encryption key derived from the extension's installation ID via **PBKDF2** (SHA-256, 100,000 iterations)
+- Each installation has a unique derived key — encrypted blobs cannot be ported between installations
+- A random 12-byte IV is generated per encryption operation
+- If a stored key appears unencrypted (migration path from older versions), it is used as-is and re-encrypted on next save
 
-### 6. ✅ Content Security Policy
-**Status**: ✅ Safe - Extension uses manifest v3 with proper CSP.
+Keys are decrypted only in the service worker (`background.js`) and are never sent to any surface other than the configured backend URL.
 
-### 7. ✅ Script Injection
-**Status**: ✅ Safe - Scripts are injected via chrome.scripting API with proper validation.
+---
 
-## Security Best Practices Implemented
+## SSRF Protection
 
-1. ✅ API keys encrypted with AES-256-GCM before storage
-2. ✅ Encryption key derived from extension ID (unique per installation)
-3. ✅ API keys stored in chrome.storage.local (OS-level encryption + application-level encryption)
-4. ✅ No eval() or dangerous code execution
-5. ✅ No innerHTML usage (Svelte handles escaping)
-6. ✅ URL validation before API calls
-7. ✅ Input validation and sanitization
-8. ✅ Message action validation
-9. ✅ Proper error handling without exposing sensitive data
-10. ✅ Rate limiting to prevent API abuse
-11. ✅ CSP (Content Security Policy) validation and configuration
-12. ✅ User-friendly error messages for rate limit violations
-13. ✅ Backward compatible with unencrypted keys (automatic migration)
+All user-supplied URLs are validated in the service worker before any outbound request is made.
 
-## API Key Encryption Details
+- Only `http://` and `https://` schemes are accepted
+- `javascript:`, `data:`, and other schemes are rejected
+- URL validation runs in `isValidUrl()` and `getValidatedFetchUrl()` in `background.js`
 
-The extension now encrypts API keys by default using industry-standard encryption:
+Tests: `background-helpers.test.js` — covers rejection of non-http(s), `javascript:`, and `data:` URLs.
 
-- **Algorithm**: AES-256-GCM (Galois/Counter Mode)
-- **Key Derivation**: PBKDF2 with SHA-256, 100,000 iterations
-- **Key Source**: Extension ID + salt (unique per installation)
-- **IV**: Random 12-byte IV generated for each encryption
-- **Storage**: Encrypted keys stored in chrome.storage.local (double encryption: OS-level + application-level)
-
-**Security Benefits**:
-- API keys are encrypted even if chrome.storage.local is accessed
-- Each extension installation has a unique encryption key
-- Keys cannot be decrypted without the extension ID
-- Backward compatible with existing unencrypted keys
-
-## Remaining Considerations
-
-1. **API Key Exposure**: Encrypted API keys are visible in Chrome DevTools storage, but they are encrypted and cannot be decrypted without the extension ID. This is expected behavior for browser extensions but users should be aware.
-2. **Network Traffic**: All API calls go through the background script, which is good for security.
-3. **Permissions**: Extension requires `<all_urls>` permission to work on any website. This is necessary for functionality but users should trust the extension.
-4. **Encryption Key**: The encryption key is derived from the extension ID. If the extension is uninstalled and reinstalled, the encryption key will change and existing encrypted keys cannot be decrypted (this is by design for security).
-
-## Recommendations
-
-1. ✅ **Rate Limiting**: Implemented - Added rate limiting for API calls
-   - Chat completions: 10 requests per minute
-   - Model fetching: 5 requests per minute
-   - General API calls: 20 requests per minute
-2. ✅ **API Key Encryption**: Implemented - API keys are now encrypted by default using AES-256-GCM
-3. Add user notification when API key is exposed in console
-4. ✅ **CSP Validation**: Implemented - Added CSP validation and manifest CSP configuration
-
-## Testing
-
-### Automated unit tests (Vitest)
-
-Security-critical behavior is covered by unit tests in `extension/`:
-
-- **URL validation (SSRF)**: `background-helpers.test.js` — `isValidUrl`, `getValidatedFetchUrl` reject non-http(s), `javascript:`, `data:` URLs
-- **Rate limiting**: `background-helpers.test.js` — keys and config for chat/models/general
-- **API layer**: `apis/index.test.js` — getModels and chat completion error handling, Chrome API availability
-- **Utils**: `utils/index.test.js` — stream splitting, markdown rendering and escaping
-
-Run: `cd extension && npm test` (or `npm run test:coverage` for coverage).
-
-### Manual verification
-
-All security fixes have been tested and verified:
-
-- ✅ URL validation prevents SSRF
-- ✅ Input sanitization prevents injection
-- ✅ Message validation prevents unauthorized actions
-- ✅ No XSS vulnerabilities found
-- ✅ Proper error handling
-- ✅ Rate limiting prevents API abuse
-- ✅ CSP validation ensures secure content loading
-- ✅ API key encryption protects sensitive credentials
-
-### OWASP ZAP and DAST
-
-**OWASP ZAP** (and similar DAST tools) scan a *running web application* by crawling and probing it. This project is a **Chrome extension** that runs in the browser and calls the user’s Open WebUI backend; the extension does not serve its own web app. So:
-
-- **For this repo**: Unit tests and dependency checks (`npm audit`) are the primary automated security testing. Optionally you can point ZAP at the extension’s side panel or popup URL when loaded in Chrome; that is niche and not required for typical development.
-- **For the Open WebUI backend**: If you operate or deploy Open WebUI itself, running ZAP (or another DAST tool) against that backend is recommended; see the [Open WebUI](https://github.com/open-webui/open-webui) project for that scope.
+---
 
 ## Rate Limiting
 
-The extension implements sensible rate limits to prevent abuse while maintaining functionality:
+Implemented as a sliding-window counter in `chrome.storage.local`:
 
-- **Chat Completions**: 10 requests per minute (allows rapid follow-up questions)
-- **Model Fetching**: 5 requests per minute (less frequent operation)
-- **General API Calls**: 20 requests per minute (fallback limit)
+| Endpoint type | Limit |
+|---------------|-------|
+| Chat completions | 10 requests / minute |
+| Model fetching | 5 requests / minute |
+| General API calls | 20 requests / minute |
 
-Rate limits use a sliding window approach stored securely in chrome.storage.local. Users will receive clear error messages if limits are exceeded, with wait times displayed in seconds.
+Users receive a clear error message with a countdown when a limit is hit.
+
+---
+
+## Message Action Validation
+
+Content scripts and extension pages communicate with the service worker via `chrome.runtime.sendMessage`. The service worker rejects any message whose `action` field is not in the `ALLOWED_ACTIONS` whitelist in `background.js`. Unknown or malformed actions return an error response — they are never executed.
+
+---
+
+## XSS
+
+- Svelte's template engine escapes all interpolated values by default — user-provided text is never rendered as raw HTML
+- Markdown is rendered via the `marked` library to sanitized HTML; the output is displayed with `{@html}` only in the markdown content region, which is scoped and isolated
+- No `eval()` or `Function()` constructor usage anywhere in the codebase
+
+---
 
 ## Content Security Policy
 
-- ✅ CSP configured in manifest.json for extension pages
-- ✅ CSP headers validated from API responses
-- ✅ No inline scripts or unsafe eval() usage
-- ✅ All resources loaded from trusted sources
+Defined in `manifest.json`:
 
+```json
+"content_security_policy": {
+  "extension_pages": "script-src 'self'; object-src 'self';"
+}
+```
+
+No inline scripts, no `unsafe-eval`, no external script sources.
+
+---
+
+## CSS Isolation
+
+Extension UI is mounted inside `#extension-app` with scoped `!important` overrides to prevent host-page styles from leaking in. This is a UX concern, but it also prevents host pages from visually spoofing extension UI elements.
+
+---
+
+## Permissions Rationale
+
+| Permission | Justification |
+|------------|---------------|
+| `storage` | Persist settings and encrypted API keys |
+| `scripting` | Inject content script into page |
+| `contextMenus` | Register right-click menu items |
+| `sidePanel` | Open Chrome side panel |
+| `commands` | Register keyboard shortcuts |
+| `host_permissions: <all_urls>` | Extension must run on any page the user visits |
+
+The `<all_urls>` permission is broad by necessity — the spotlight search and direct-to-input features must work on any site.
+
+---
+
+## Known Considerations
+
+**Encrypted keys visible in DevTools storage** — the encrypted blob is visible under Application → Storage → Extension Storage. It cannot be decrypted without the installation-specific derived key, which is not stored directly.
+
+**Key loss on reinstall** — if the extension is uninstalled and reinstalled, the derived key changes and previously encrypted API keys cannot be recovered. Users must re-enter their keys. This is intentional.
+
+**`<all_urls>` permission** — content scripts run on all pages. The content script only creates a DOM mount point and loads the Svelte bundle; it does not read or transmit page content except when the user explicitly invokes a summarize/explain/sidebar feature.
+
+**Network traffic** — all API calls are routed through the service worker, not the content script. The content script never makes direct network requests.
+
+---
+
+## Automated Tests
+
+Run: `cd extension && npm test`
+
+| Test file | Coverage |
+|-----------|----------|
+| `background-helpers.test.js` | `isValidUrl`, `getValidatedFetchUrl`, rate-limit keys |
+| `apis/index.test.js` | `getModels`, `generateOpenAIChatCompletion`, Chrome API error paths |
+| `utils/index.test.js` | Stream parsing, markdown rendering and escaping |
+| `lib/appearance.test.ts` | Appearance logic (no security impact, included for completeness) |
+
+Dependency vulnerabilities: `npm audit --audit-level=high` runs in CI on every push.

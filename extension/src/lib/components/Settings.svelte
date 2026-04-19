@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Provider } from '../storage';
-  import { applyAppearance, loadAndApplyAppearance, ACCENT_PRESETS, DEFAULT_APPEARANCE } from '../appearance';
+  import { applyAppearance, ACCENT_PRESETS, DEFAULT_APPEARANCE } from '../appearance';
   import type { AppearanceSettings } from '../storage';
 
   let activeTab: 'providers' | 'appearance' | 'shortcuts' | 'about' = 'providers';
@@ -327,7 +327,7 @@
               on:input={onAccentInput}
               style="opacity:0;position:absolute;inset:0;width:26px;height:26px;cursor:pointer"
             />
-            <div style="width:26px;height:26px;border-radius:50%;background:{isCustomAccent?appearance.accentColor:'var(--grace-bg-input)'};border:2px solid {isCustomAccent?'var(--grace-text)':'var(--grace-border)'};display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--grace-text-muted);line-height:1">+</div>
+            <div style="width:26px;height:26px;border-radius:50%;background:{isCustomAccent?appearance.accentColor:'var(--grace-bg-input)'};border:2px solid {isCustomAccent?'var(--grace-text)':'var(--grace-border)'};display:flex;align-items:center;justify-content:center;font-size:var(--grace-font-md);color:var(--grace-text-muted);line-height:1">+</div>
           </label>
         </div>
         {#if isCustomAccent}

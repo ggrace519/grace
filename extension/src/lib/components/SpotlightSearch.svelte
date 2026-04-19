@@ -1545,7 +1545,7 @@
                         title={link.href}
                       >
                         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{link.text}</span>
-                        <span style="color:var(--grace-text-faint);font-size:9px;margin-left:auto;flex-shrink:0">↗</span>
+                        <span aria-hidden="true" style="color:var(--grace-text-faint);font-size:9px;margin-left:auto;flex-shrink:0">↗</span>
                       </a>
                     {/each}
                   </div>

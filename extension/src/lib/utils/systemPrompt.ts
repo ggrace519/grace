@@ -22,7 +22,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
   }
 
   if (mode === 'explain') {
-    return 'You are a helpful assistant. Your task is to explain selected text clearly and concisely. Break down complex concepts, define unfamiliar terms, and provide relevant context to help the user understand the content.';
+    return 'You are a helpful assistant that explains selected text or concepts. The user will provide text they want explained. Provide a clear, educational explanation that covers: what the term or concept means, why it matters, a concrete example if helpful, and any closely related ideas worth knowing. Use markdown formatting (bold key terms, use lists for multiple points) when it improves clarity.';
   }
 
   if (mode === 'spotlight') {

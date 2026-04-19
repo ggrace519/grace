@@ -7,3 +7,5 @@
 # Build outputs
 extension/dist/
 extension/node_modules/
+.superpowers/
+.worktrees/

@@ -60,7 +60,7 @@ export function getUserFriendlyErrorMessage(error) {
   if (errorMessage.includes("Failed to fetch") ||
       errorMessage.includes("NetworkError") ||
       errorMessage.includes("ECONNREFUSED")) {
-    return "Could not connect to Open WebUI. Please check the URL and ensure the server is running.";
+    return "Could not connect to the AI backend. Check the URL and ensure the server is running.";
   }
 
   // Timeout errors

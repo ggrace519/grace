@@ -1,9 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent, getSidebarInit, pingSidebarWake, decryptApiKeyFromBackground, encryptApiKeyViaBackground } from "../apis";
+  import { generateOpenAIChatCompletion, getModels, getActiveTabPageContent, getSidebarInit, pingSidebarWake } from "../apis";
   import { splitStream, renderMarkdown } from "../utils";
-
-  type StoredConfig = { url?: string; key?: string; model?: string };
 
   // Helper for user-friendly error messages
   function getUserFriendlyErrorMessage(error: any): string {
@@ -12,7 +10,7 @@
       return "Rate limit exceeded. Please wait a moment and try again.";
     }
     if (errorMessage.includes("Failed to fetch") || errorMessage.includes("NetworkError")) {
-      return "Could not connect to Open WebUI. Please check the URL.";
+      return "Could not connect to the AI backend. Check the URL and ensure the server is running.";
     }
     if (errorMessage.includes("401") || errorMessage.includes("Invalid API key")) {
       return "Invalid API key. Please check your configuration.";
@@ -31,7 +29,7 @@
   export let sidebarMode = false;
 
   let show = false;
-  let showConfig = true;
+  let isConfigured = false; // true once url+key+model are loaded
   let showResponse = false; // ENHANCEMENT: Controls response popup visibility
   let responseText = ""; // ENHANCEMENT: Current streaming response text
   let thinkingText = ""; // ENHANCEMENT: Thinking tokens from thinking models
@@ -43,7 +41,6 @@
   let isStreaming = false; // ENHANCEMENT: Tracks if response is currently streaming
   let errorMessage = ""; // ENHANCEMENT: Error message for rate limits, etc.
   let showError = false; // ENHANCEMENT: Controls error message visibility
-  let configFormError = ""; // Error shown inside the config form when model loading fails
 
   const closeResponseModal = () => {
     showResponse = false;
@@ -60,6 +57,8 @@
   let url = "";
   let key = "";
   let model = "";
+  let providerType = "openai-compatible";
+  let activeProviderId = "";
 
   let searchValue = "";
   let models = [];
@@ -67,35 +66,6 @@
   let sidebarPageContext = "";
   let responseContainer: HTMLElement | null = null;
   let userScrolledUp = false; // Track if user has manually scrolled up
-
-  const resetConfig = () => {
-    console.log("resetConfig");
-
-    if (!isChromeAPIAvailable()) {
-      console.debug("Extension: Chrome APIs not available - cannot reset config");
-      return;
-    }
-
-    try {
-      chrome.storage.local.clear().then(() => {
-        console.log("Value is cleared");
-      });
-    } catch (error) {
-      if (isContextInvalidatedError(error)) {
-        // Expected when extension is reloaded - use debug level
-        console.debug("Extension: Chrome storage API not available - extension may have been reloaded");
-      } else {
-        console.log(error);
-      }
-      // Security: Removed localStorage fallback - chrome.storage.local is more secure
-    }
-
-    url = "";
-    key = "";
-    model = "";
-    models = [];
-    showConfig = true;
-  };
 
   const submitHandler = async (e) => {
     e.preventDefault();
@@ -135,7 +105,6 @@
   const handleSidebarSubmit = async () => {
     if (!searchValue.trim() || isStreaming) return;
     if (!url || !key || !model) {
-      showConfig = true;
       return;
     }
 
@@ -176,7 +145,7 @@
         const truncated = pageContext.length > maxPageChars
           ? pageContext.substring(0, maxPageChars) + "\n\n[Content truncated for length.]"
           : pageContext;
-        systemContent = `You are a helpful AI assistant in the Open WebUI side panel. The user can have any conversation they want. Below is the extracted text from the web page they currently have open—use it as context when their questions relate to the page (e.g. summarizing, explaining, or tasks based on it). If they ask about something not in the content, answer from your general knowledge and say so when it's not from the page. When they do refer to the page, base your answer on what is actually there. Keep a clear, friendly tone and use markdown when it helps. You only respond in the panel; you cannot interact with the browser.
+        systemContent = `You are a helpful AI assistant in the Grace sidebar. The user can have any conversation they want. Below is the extracted text from the web page they currently have open—use it as context when their questions relate to the page (e.g. summarizing, explaining, or tasks based on it). If they ask about something not in the content, answer from your general knowledge and say so when it's not from the page. When they do refer to the page, base your answer on what is actually there. Keep a clear, friendly tone and use markdown when it helps. You only respond in the panel; you cannot interact with the browser.
 
 ---
 Page content:
@@ -269,83 +238,6 @@ End of page content.
     }
   };
 
-  const initHandler = async (e) => {
-    e.preventDefault();
-
-    // ========================================================================
-    // ENHANCEMENT: API Key Encryption on Save
-    // ========================================================================
-    // Encrypts API key before storing in chrome.storage.local. This prevents
-    // API keys from being stored in plain text. Includes URL and input validation.
-    // ========================================================================
-    // Security: Validate URL format before saving
-    try {
-      const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
-      if (!['http:', 'https:'].includes(urlObj.protocol)) {
-        console.error("Extension: Invalid URL protocol");
-        return;
-      }
-    } catch (error) {
-      console.error("Extension: Invalid URL format");
-      return;
-    }
-    
-    // Security: Basic API key validation (non-empty string)
-    if (!key || typeof key !== 'string' || key.trim().length === 0) {
-      console.error("Extension: Invalid API key");
-      return;
-    }
-    
-    // Security: Basic model validation
-    if (!model || typeof model !== 'string' || model.trim().length === 0) {
-      console.error("Extension: Invalid model");
-      return;
-    }
-
-    const c = typeof globalThis !== "undefined" ? (globalThis as any).chrome : undefined;
-    if (!c?.storage?.local || !c?.runtime?.sendMessage) {
-      console.debug("Extension: Chrome APIs not available - cannot save config");
-      return;
-    }
-
-    try {
-      const encryptionResponse = await encryptApiKeyViaBackground(key.trim());
-      if (encryptionResponse.error) {
-        console.error("Extension: Failed to encrypt API key:", encryptionResponse.error);
-        await c.storage.local.set({
-          url: url.trim(),
-          key: key.trim(),
-          model: model.trim()
-        });
-      } else {
-        await c.storage.local.set({
-          url: url.trim(),
-          key: encryptionResponse.encrypted,
-          model: model.trim()
-        });
-        console.debug("Extension: Config saved (API key encrypted)");
-      }
-    } catch (error) {
-      if (isContextInvalidatedError(error)) {
-        console.debug("Extension: Chrome APIs not available - extension may have been reloaded");
-      } else {
-        console.error("Extension: Error saving config:", error);
-      }
-    }
-
-    configFormError = "";
-    showConfig = false;
-
-    // Fetch models for the sidebar dropdown
-    if (sidebarMode && url && key) {
-      try {
-        models = await getModels(key, url);
-      } catch (modelError) {
-        console.log("Failed to load models:", modelError);
-      }
-    }
-  };
-
   // Function to toggle search interface
   const toggleSearch = async () => {
     if (!isChromeAPIAvailable()) {
@@ -375,8 +267,7 @@ End of page content.
 
     if (!sidebarMode) {
       setTimeout(() => {
-        const inputId = showConfig ? "open-webui-url-input" : "open-webui-search-input";
-        const inputElement = document.getElementById(inputId);
+        const inputElement = document.getElementById("open-webui-search-input");
         if (inputElement) {
           inputElement.focus();
         }
@@ -405,55 +296,17 @@ End of page content.
       return;
     }
 
-    // Get current config
-    let currentUrl = url;
-    let currentKey = key;
-    let currentModel = model;
-
-    if (!isChromeAPIAvailable()) {
-      console.debug("Extension: Chrome APIs not available - cannot get config");
-      if (!currentUrl || !currentKey || !currentModel) {
-        showResponse = true;
-        showError = true;
-        errorMessage = "Extension was reloaded or is unavailable. Please refresh the page and try again.";
-        setTimeout(() => {
-          showError = false;
-          errorMessage = "";
-        }, 8000);
-        return;
-      }
-    } else {
-      try {
-        const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
-        if (storedConfig.url) currentUrl = storedConfig.url;
-        if (storedConfig.model) currentModel = storedConfig.model;
-        
-        // Decrypt API key if it exists (uses retry for port-closed errors)
-        if (storedConfig.key) {
-          const decryptionResponse = await decryptApiKeyFromBackground(storedConfig.key);
-          if (decryptionResponse?.error) {
-            console.debug("Extension: Decrypt unavailable, using stored key as-is:", decryptionResponse.error);
-            currentKey = storedConfig.key;
-          } else {
-            currentKey = decryptionResponse.decrypted ?? storedConfig.key;
-          }
-        }
-      } catch (error) {
-        if (isContextInvalidatedError(error)) {
-          // Expected when extension is reloaded - use debug level
-          console.debug("Extension: Chrome storage API not available - extension may have been reloaded");
-        } else {
-          console.error("Extension: Error getting config:", error);
-        }
-      }
-    }
+    // Use already-loaded config
+    const currentUrl = url;
+    const currentKey = key;
+    const currentModel = model;
 
     // Check if we have valid config - show modal with error so user sees the response UI
     if (!currentUrl || !currentKey || !currentModel) {
-      console.warn("Extension: Missing configuration. Please configure the extension first.");
+      console.warn("Extension: Missing configuration. Please configure Grace first.");
       showResponse = true;
       showError = true;
-      errorMessage = "Please configure the extension first. Use the search bar settings (gear icon) to set Open WebUI URL, API key, and model.";
+      errorMessage = "Grace isn't configured yet. Open Settings to set up a provider.";
       setTimeout(() => {
         showError = false;
         errorMessage = "";
@@ -648,72 +501,17 @@ End of page content.
       return;
     }
 
-    // Get current config
-    let currentUrl = url;
-    let currentKey = key;
-    let currentModel = model;
-
-    if (!isChromeAPIAvailable()) {
-      console.debug("Extension: Chrome APIs not available - cannot get config");
-      if (!currentUrl || !currentKey || !currentModel) {
-        showResponse = true;
-        showError = true;
-        errorMessage = "Extension was reloaded or is unavailable. Please refresh the page and try again.";
-        setTimeout(() => {
-          showError = false;
-          errorMessage = "";
-        }, 8000);
-        return;
-      }
-    } else {
-      try {
-        const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
-        if (storedConfig.url) currentUrl = storedConfig.url;
-        if (storedConfig.model) currentModel = storedConfig.model;
-        
-        // Decrypt API key if it exists
-        if (storedConfig.key) {
-              try {
-            const decryptionResponse = await chrome.runtime.sendMessage({
-              action: "decryptApiKey",
-              encryptedApiKey: storedConfig.key
-            });
-            
-            if (decryptionResponse.error) {
-              console.error("Extension: Failed to decrypt API key:", decryptionResponse.error);
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            } else {
-              currentKey = decryptionResponse.decrypted;
-            }
-          } catch (error) {
-            const errorMsg = error?.message || String(error);
-            if (errorMsg.includes("Extension context invalidated") || 
-                errorMsg.includes("Cannot read properties of undefined")) {
-              console.warn("Extension: Chrome runtime API not available");
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            } else {
-              console.error("Extension: Error decrypting API key:", error);
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            }
-          }
-        }
-      } catch (error) {
-        const errorMsg = error?.message || String(error);
-        if (errorMsg.includes("Extension context invalidated") || 
-            errorMsg.includes("Cannot read properties of undefined")) {
-          console.warn("Extension: Chrome storage API not available - extension may have been reloaded");
-        } else {
-          console.error("Extension: Error getting config:", error);
-        }
-      }
-    }
+    // Use already-loaded config
+    const currentUrl = url;
+    const currentKey = key;
+    const currentModel = model;
 
     // Check if we have valid config - show modal with error so user sees the response UI
     if (!currentUrl || !currentKey || !currentModel) {
-      console.warn("Extension: Missing configuration. Please configure the extension first.");
+      console.warn("Extension: Missing configuration. Please configure Grace first.");
       showResponse = true;
       showError = true;
-      errorMessage = "Please configure the extension first. Use the search bar settings (gear icon) to set Open WebUI URL, API key, and model.";
+      errorMessage = "Grace isn't configured yet. Open Settings to set up a provider.";
       setTimeout(() => {
         showError = false;
         errorMessage = "";
@@ -938,43 +736,10 @@ End of page content.
       }
     }, 100);
 
-    // Get current config
-    let currentUrl = url;
-    let currentKey = key;
-    let currentModel = model;
-
-        try {
-          const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
-          if (storedConfig.url) currentUrl = storedConfig.url;
-          if (storedConfig.model) currentModel = storedConfig.model;
-          
-          // Decrypt API key if it exists
-          if (storedConfig.key) {
-            try {
-              const decryptionResponse = await chrome.runtime.sendMessage({
-                action: "decryptApiKey",
-                encryptedApiKey: storedConfig.key
-              });
-              
-              if (decryptionResponse.error) {
-                console.error("Extension: Failed to decrypt API key:", decryptionResponse.error);
-                currentKey = storedConfig.key; // Use as-is (backward compatibility)
-              } else {
-                currentKey = decryptionResponse.decrypted;
-              }
-            } catch (error) {
-              console.error("Extension: Error decrypting API key:", error);
-              currentKey = storedConfig.key; // Use as-is (backward compatibility)
-            }
-          }
-        } catch (error) {
-          // Extension context might be invalidated - use existing values
-          if (error.message && error.message.includes("Extension context invalidated")) {
-            // Silently use existing config values
-          } else {
-            console.log("Failed to get stored config:", error);
-          }
-        }
+    // Use already-loaded config
+    const currentUrl = url;
+    const currentKey = key;
+    const currentModel = model;
 
     // Determine endpoint
     const isOpenAI = models.length > 0 
@@ -1154,6 +919,13 @@ End of page content.
     }
   };
 
+  /** Open the Settings page via the background service worker. */
+  const openSettings = () => {
+    if (isChromeAPIAvailable()) {
+      (globalThis as any).chrome.runtime.sendMessage({ action: 'openSettings' });
+    }
+  };
+
   // Helper function to check if Chrome APIs are available.
   // Use globalThis to read chrome so we get the real extension API in side panel / extension pages.
   const isChromeAPIAvailable = (): boolean => {
@@ -1189,7 +961,6 @@ End of page content.
     // In sidebar mode, show the main search by default
     if (sidebarMode) {
       show = true;
-      showConfig = false;
     }
 
     // Define handlers first so they can be registered in both branches
@@ -1300,10 +1071,7 @@ End of page content.
     }
 
     const down = async (e) => {
-      // Reset the configuration when ⌘Shift+Escape is pressed
-      if (show && e.shiftKey && e.key === "Escape") {
-        resetConfig();
-      } else if (e.key === "Escape") {
+      if (e.key === "Escape") {
         if (showResponse) {
           showResponse = false;
           responseText = "";
@@ -1334,71 +1102,14 @@ End of page content.
         e.stopPropagation();
         e.stopImmediatePropagation();
 
-        // Always fetch fresh config from storage to ensure we have it
-        let currentUrl = url;
-        let currentKey = key;
-        let currentModel = model;
-
-        if (!isChromeAPIAvailable()) {
-          console.debug("Extension: Chrome APIs not available - using cached config");
-          // Use existing values if Chrome APIs aren't available
-          if (!currentUrl || !currentKey || !currentModel) {
-            console.warn("Extension: Missing configuration. Please configure the extension first.");
-            return;
-          }
-        } else {
-              try {
-            const storedConfig = (await chrome.storage.local.get(["url", "key", "model"])) as StoredConfig;
-            if (storedConfig.url) {
-              currentUrl = storedConfig.url;
-              url = storedConfig.url;
-            }
-            if (storedConfig.model) {
-              currentModel = storedConfig.model;
-              model = storedConfig.model;
-            }
-            
-            // Decrypt API key if it exists
-            if (storedConfig.key) {
-              try {
-                const decryptionResponse = await chrome.runtime.sendMessage({
-                  action: "decryptApiKey",
-                  encryptedApiKey: storedConfig.key
-                });
-                
-                if (decryptionResponse.error) {
-                  console.error("Extension: Failed to decrypt API key:", decryptionResponse.error);
-                  currentKey = storedConfig.key; // Use as-is (backward compatibility)
-                  key = storedConfig.key;
-                } else {
-                  currentKey = decryptionResponse.decrypted;
-                  key = decryptionResponse.decrypted;
-                }
-              } catch (error) {
-                if (isContextInvalidatedError(error)) {
-                  // Expected when extension is reloaded - use debug level
-                  console.debug("Extension: Chrome runtime API not available");
-                } else {
-                  console.error("Extension: Error decrypting API key:", error);
-                }
-                currentKey = storedConfig.key; // Use as-is (backward compatibility)
-                key = storedConfig.key;
-              }
-            }
-          } catch (error) {
-            // Extension context might be invalidated - use existing values
-            if (isContextInvalidatedError(error)) {
-              // Expected when extension is reloaded - use debug level
-              console.debug("Extension: Chrome storage API not available - using cached config");
-            } else {
-              console.log("Failed to get stored config:", error);
-            }
-          }
-        }
+        // Use already-loaded config
+        const currentUrl = url;
+        const currentKey = key;
+        const currentModel = model;
 
         // Check if we have valid config
         if (!currentUrl || !currentKey || !currentModel) {
-          console.warn("Extension: Missing configuration. Please configure the extension first.");
+          console.warn("Extension: Missing configuration. Please configure Grace first.");
           return;
         }
 
@@ -1627,122 +1338,59 @@ End of page content.
     
     // Load configuration asynchronously (IIFE so onMount can return sync cleanup)
     (async () => {
-    let _storageCache = null;
-    const chromeApi = typeof globalThis !== 'undefined' ? (globalThis as any).chrome : undefined;
-    const canLoadConfig = sidebarMode ? (chromeApi?.storage?.local != null) : isChromeAPIAvailable();
+      // Single unified config loading path via getSidebarInit (works for both modes).
+      const chromeAvailable = sidebarMode
+        ? ((typeof globalThis !== 'undefined' ? (globalThis as any).chrome : undefined)?.storage?.local != null)
+        : isChromeAPIAvailable();
 
-    if (!canLoadConfig) {
-      console.debug("Extension: Chrome APIs not available for config loading");
-      showConfig = true;
-      return;
-    }
-
-    try {
-      const storage = (chromeApi ?? (typeof globalThis !== 'undefined' ? (globalThis as any).chrome : null))?.storage?.local;
-      _storageCache = storage ? await storage.get() : null;
-    } catch (error) {
-      if (isContextInvalidatedError(error)) {
-        // Expected when extension is reloaded - use debug level
-        console.debug("Extension: Chrome storage API not available - extension may have been reloaded");
-      } else {
-        console.error("Extension: Error getting config:", error);
+      if (!chromeAvailable) {
+        console.debug("Extension: Chrome APIs not available for config loading");
+        isConfigured = false;
+        return;
       }
-    }
 
-    // Sidebar: wake worker with ping, then fast getSidebarInit (config only), then page content + models with retry.
-    if (sidebarMode && canLoadConfig) {
       await pingSidebarWake();
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 250));
+
       const initResult = await getSidebarInit();
-      if (!initResult.error && (initResult.url != null || initResult.key != null || initResult.activeModel != null)) {
-        url = initResult.url ?? "";
-        key = initResult.key ?? "";
-        model = initResult.activeModel ?? "";
-        showConfig = !(url && key && model);
-        if (url && key) {
-          // Ping again before these calls to keep worker warm
-          await pingSidebarWake();
-          await new Promise((r) => setTimeout(r, 250));
-              try {
+      if (initResult.error || !initResult.url || !initResult.key) {
+        console.debug("Extension: Grace not configured:", initResult.error ?? "missing url/key");
+        isConfigured = false;
+        return;
+      }
+
+      url = initResult.url;
+      key = initResult.key; // already decrypted by background
+      model = initResult.activeModel ?? "";
+      providerType = initResult.providerType ?? "openai-compatible";
+      activeProviderId = initResult.activeProviderId ?? "";
+      isConfigured = !!(url && key && model);
+
+      if (url && key) {
+        // Fetch page context (sidebar only) and models in parallel.
+        await pingSidebarWake();
+        await new Promise((r) => setTimeout(r, 250));
+
+        if (sidebarMode) {
+          try {
             const pageResult = await getActiveTabPageContent();
             if (pageResult?.data && typeof pageResult.data === "string" && pageResult.data.trim()) {
               sidebarPageContext = pageResult.data;
             }
           } catch (_) {}
-              try {
-            models = await getModels(key, url);
-          } catch (err) {
-            console.debug("Extension: Failed to load models (non-critical):", err);
-          }
         }
-      } else {
-        if (_storageCache) {
-          url = _storageCache.url ?? "";
-          model = _storageCache.model ?? "";
-          if (_storageCache.key) {
-            try {
-              const decryptionResponse = await decryptApiKeyFromBackground(_storageCache.key);
-              key = decryptionResponse?.error ? _storageCache.key : (decryptionResponse.decrypted ?? _storageCache.key);
-            } catch (_) {
-              key = _storageCache.key;
-            }
-          } else {
-            key = "";
-          }
-          if (_storageCache.url && key && _storageCache.model) {
-            showConfig = false;
-            if (models.length === 0) {
-              // Ping to keep worker warm before fetching models
-              await pingSidebarWake();
-              await new Promise((r) => setTimeout(r, 200));
-              try {
-                models = await getModels(key, _storageCache.url);
-              } catch (err) {
-                console.debug("Extension: Failed to load models (fallback):", err);
-              }
-            }
-          } else {
-            showConfig = true;
-          }
-        } else {
-          showConfig = true;
-        }
-      }
-    } else if (_storageCache) {
-      url = _storageCache.url ?? "";
-      model = _storageCache.model ?? "";
-      if (_storageCache.key) {
+
         try {
-          const decryptionResponse = await decryptApiKeyFromBackground(_storageCache.key);
-          if (decryptionResponse?.error) {
-            key = _storageCache.key;
-          } else {
-            key = decryptionResponse.decrypted ?? _storageCache.key;
+          const modelsResult = await getModels(activeProviderId, providerType, url, key);
+          if (modelsResult?.data?.data) {
+            models = modelsResult.data.data;
+          } else if (Array.isArray(modelsResult)) {
+            models = modelsResult;
           }
-        } catch (_) {
-          key = _storageCache.key;
+        } catch (err) {
+          console.debug("Extension: Failed to load models (non-critical):", err);
         }
-      } else {
-        key = "";
       }
-      if (_storageCache.url && key && _storageCache.model) {
-        showConfig = false;
-        if (models.length === 0) {
-          // Ping to keep worker warm before fetching models
-          await pingSidebarWake();
-          await new Promise((r) => setTimeout(r, 200));
-              try {
-            models = await getModels(key, _storageCache.url);
-          } catch (err) {
-            console.debug("Extension: Failed to load models (non-critical):", err);
-          }
-        }
-      } else {
-        showConfig = true;
-      }
-    } else {
-      showConfig = true;
-    }
     })();
     
     return () => {
@@ -1775,87 +1423,24 @@ End of page content.
         >
           <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
         </svg>
-        <span class="tlwd-text-xl tlwd-font-semibold tlwd-text-white">Open WebUI</span>
+        <span class="tlwd-text-xl tlwd-font-semibold tlwd-text-white">Grace</span>
       </div>
     </div>
 
     <!-- Sidebar Content -->
     <div class="tlwd-flex-1 tlwd-overflow-y-auto tlwd-p-4">
-      {#if showConfig}
-        <!-- Config Form -->
-        <form on:submit={initHandler} class="tlwd-space-y-4">
-          <div>
-            <label for="sidebar-url" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Open WebUI URL</label>
-            <input
-              id="sidebar-url"
-              type="url"
-              bind:value={url}
-              placeholder="http://localhost:8080"
-              class="tlwd-w-full tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
-              required
-            />
-          </div>
-          <div>
-            <label for="sidebar-key" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">API Key</label>
-            <input
-              id="sidebar-key"
-              type="password"
-              bind:value={key}
-              placeholder="Enter your API key"
-              class="tlwd-w-full tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
-              required
-            />
-          </div>
-          <div>
-            <label for="sidebar-model" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Model</label>
-            <div class="tlwd-flex tlwd-gap-2">
-              <select
-                id="sidebar-model"
-                bind:value={model}
-                class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
-                required
-              >
-                <option value="">Select a model</option>
-                {#each models as m}
-                  <option value={m.id}>{m.name ?? m.id}</option>
-                {/each}
-              </select>
-              <button
-                type="button"
-                on:click={async () => {
-                  if (!url) {
-                    alert("Please enter a URL first");
-                    return;
-                  }
-                  if (!key) {
-                    alert("Please enter an API key first");
-                    return;
-                  }
-                  try {
-                    console.log("Loading models from:", url, "with key:", key ? "provided" : "missing");
-                    models = await getModels(key, url);
-                    console.log("Models loaded:", models.length);
-                  } catch (e) {
-                    console.log("Failed to load models:", e);
-                    alert("Failed to load models: " + e.message);
-                  }
-                }}
-                class="tlwd-px-3 tlwd-py-2 tlwd-bg-gray-700 hover:tlwd-bg-gray-600 tlwd-text-white tlwd-rounded-lg tlwd-text-sm"
-                title="Load available models"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width={2} stroke="currentColor" class="tlwd-w-5 tlwd-h-5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                </svg>
-              </button>
-            </div>
-          </div>
+      {#if !isConfigured}
+        <!-- Not configured state -->
+        <div class="tlwd-flex tlwd-flex-col tlwd-items-center tlwd-justify-center tlwd-h-full tlwd-gap-4 tlwd-text-center">
+          <p class="tlwd-text-gray-300 tlwd-text-base">Grace isn't configured yet.</p>
           <button
-            type="submit"
-            class="tlwd-w-full tlwd-py-2 tlwd-bg-blue-600 hover:tlwd-bg-blue-700 tlwd-text-white tlwd-rounded-lg tlwd-font-medium"
+            type="button"
+            class="tlwd-px-4 tlwd-py-2 tlwd-bg-blue-600 hover:tlwd-bg-blue-700 tlwd-text-white tlwd-rounded-lg tlwd-font-medium tlwd-transition-colors"
+            on:click={openSettings}
           >
-            Save & Start Chatting
+            Open Settings
           </button>
-        </form>
+        </div>
       {:else}
         <!-- Chat Interface - Uses conversationHistory -->
         <div class="tlwd-space-y-4" bind:this={responseContainer}>
@@ -1908,13 +1493,13 @@ End of page content.
     </div>
 
     <!-- Sidebar Input -->
-    {#if !showConfig}
+    {#if isConfigured}
       <div class="tlwd-p-4 tlwd-border-t tlwd-border-gray-700">
         <form on:submit|preventDefault={submitHandler} class="tlwd-flex tlwd-gap-2">
           <input
             type="text"
             bind:value={searchValue}
-            placeholder="Ask something..."
+            placeholder="Ask Grace..."
             disabled={isStreaming}
             class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500 disabled:tlwd-opacity-50"
           />
@@ -1933,10 +1518,10 @@ End of page content.
         <div class="tlwd-flex tlwd-items-center tlwd-justify-between tlwd-mt-3">
           <button
             class="tlwd-text-xs tlwd-text-gray-400 hover:tlwd-text-gray-300"
-            on:click={() => showConfig = true}
+            on:click={openSettings}
             type="button"
           >
-            Configure
+            Settings
           </button>
         </div>
       </div>
@@ -1949,166 +1534,20 @@ End of page content.
       show = false;
     }}
   >
-    {#if showConfig}
+    {#if !isConfigured}
       <div class=" tlwd-m-auto tlwd-max-w-sm tlwd-w-full tlwd-pb-32">
         <div
-          class="tlwd-w-full tlwd-flex tlwd-flex-col tlwd-justify-between tlwd-py-2.5 tlwd-px-3.5 tlwd-rounded-2xl tlwd-outline tlwd-outline-1 tlwd-outline-gray-850 tlwd-backdrop-blur-3xl tlwd-bg-gray-850/70 shadow-4xl modal-animation"
+          class="tlwd-w-full tlwd-flex tlwd-flex-col tlwd-items-center tlwd-gap-4 tlwd-py-6 tlwd-px-6 tlwd-rounded-2xl tlwd-outline tlwd-outline-1 tlwd-outline-gray-850 tlwd-backdrop-blur-3xl tlwd-bg-gray-850/70 shadow-4xl modal-animation"
+          on:mousedown={(e) => e.stopPropagation()}
         >
-          <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-          <form
-            class="tlwd-text-neutral-100 tlwd-w-full tlwd-p-0 tlwd-m-0"
-            on:submit={initHandler}
-            on:mousedown={(e) => {
-              e.stopPropagation();
-            }}
-            autocomplete="off"
-            enctype="application/x-www-form-urlencoded"
+          <p class="tlwd-text-neutral-200 tlwd-text-base">Grace isn't configured yet.</p>
+          <button
+            type="button"
+            class="tlwd-px-4 tlwd-py-2 tlwd-bg-blue-600 hover:tlwd-bg-blue-700 tlwd-text-white tlwd-rounded-lg tlwd-font-medium tlwd-transition-colors tlwd-outline-none tlwd-border-none tlwd-cursor-pointer"
+            on:click={openSettings}
           >
-            <div class="tlwd-flex tlwd-items-center tlwd-gap-2 tlwd-w-full">
-              <div class=" tlwd-flex tlwd-items-center">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width={2.5}
-                  stroke="currentColor"
-                  class="tlwd-size-5"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"
-                  />
-                </svg>
-              </div>
-              <input
-                id="open-webui-url-input"
-                placeholder="Open WebUI URL"
-                class="tlwd-p-0 tlwd-m-0 tlwd-text-xl tlwd-w-full tlwd-font-medium tlwd-bg-transparent tlwd-border-none placeholder:tlwd-text-gray-500 tlwd-text-neutral-100 tlwd-outline-none"
-                bind:value={url}
-                autocomplete="one-time-code"
-                required
-              />
-            </div>
-            <div
-              class="tlwd-flex tlwd-items-center tlwd-gap-2 tlwd-w-full tlwd-mt-2"
-            >
-              <div class=" tlwd-flex tlwd-items-center">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width={2.5}
-                  stroke="currentColor"
-                  class="tlwd-size-5"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"
-                  />
-                </svg>
-              </div>
-              <input
-                placeholder="Open WebUI API Key"
-                class="tlwd-p-0 tlwd-m-0 tlwd-text-xl tlwd-w-full tlwd-font-medium tlwd-bg-transparent tlwd-border-none placeholder:tlwd-text-gray-500 tlwd-text-neutral-100 tlwd-outline-none"
-                bind:value={key}
-                autocomplete="one-time-code"
-                required
-              />
-              <button
-                class=" tlwd-flex tlwd-items-center tlwd-bg-transparent tlwd-text-neutral-100 tlwd-cursor-pointer tlwd-p-0 tlwd-m-0 tlwd-outline-none tlwd-border-none"
-                type="button"
-                on:click={async () => {
-                  if (url.endsWith("/")) {
-                    url = url.slice(0, -1);
-                  }
-
-                  try {
-                    models = await getModels(key, url);
-                    configFormError = "";
-                  } catch (error) {
-                    const errorMsg = error?.message || String(error);
-                    configFormError = errorMsg || "Failed to load models. Check URL and API key.";
-                  }
-                }}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width={2.5}
-                  stroke="currentColor"
-                  class="tlwd-size-5"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            {#if configFormError}
-              <p class="tlwd-text-red-400 tlwd-text-sm tlwd-mt-2 tlwd-px-1">{configFormError}</p>
-            {/if}
-
-            {#if models && models.length > 0}
-              <div
-                class="tlwd-flex tlwd-items-center tlwd-gap-2 tlwd-w-full tlwd-mt-2"
-              >
-                <div class=" tlwd-flex tlwd-items-center">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width={2.5}
-                    stroke="currentColor"
-                    class="tlwd-size-5"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-                    />
-                  </svg>
-                </div>
-                <select
-                  id="open-webui-model-input"
-                  class="tlwd-p-0 tlwd-m-0 tlwd-text-xl tlwd-w-full tlwd-font-medium tlwd-bg-gray-800/50 tlwd-border-none tlwd-text-neutral-100 tlwd-outline-none"
-                  style="color: rgb(245 245 245) !important; background-color: rgba(31, 41, 55, 0.5) !important; -webkit-text-fill-color: rgb(245 245 245) !important;"
-                  bind:value={model}
-                  autocomplete="off"
-                  required
-                >
-                  <option value="" style="color: rgb(245 245 245) !important; background-color: rgba(31, 41, 55, 0.8) !important;">Select a model</option>
-                  {#each models as model}
-                    <option value={model.id} style="color: rgb(245 245 245) !important; background-color: rgba(31, 41, 55, 0.8) !important;">{model.name ?? model.id}</option>
-                  {/each}
-                </select>
-                <button
-                  class=" tlwd-flex tlwd-items-center tlwd-bg-transparent tlwd-text-neutral-100 tlwd-cursor-pointer tlwd-p-0 tlwd-m-0 tlwd-outline-none tlwd-border-none"
-                  type="submit"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width={2.5}
-                    stroke="currentColor"
-                    class="tlwd-size-5"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="m4.5 12.75 6 6 9-13.5"
-                    />
-                  </svg>
-                </button>
-              </div>
-            {/if}
-          </form>
+            Open Settings
+          </button>
         </div>
       </div>
     {:else}
@@ -2145,7 +1584,7 @@ End of page content.
               </div>
               <input
                 id="open-webui-search-input"
-                placeholder="Search Open WebUI"
+                placeholder="Ask Grace..."
                 class="tlwd-p-0 tlwd-m-0 tlwd-text-xl tlwd-w-full tlwd-font-medium tlwd-bg-transparent tlwd-border-none placeholder:tlwd-text-gray-500 tlwd-text-neutral-100 tlwd-outline-none"
                 bind:value={searchValue}
                 autocomplete="one-time-code"
@@ -2163,9 +1602,7 @@ End of page content.
               <button
                 class=" tlwd-h-fit tlwd-flex tlwd-items-center tlwd-bg-transparent tlwd-text-neutral-100 tlwd-cursor-pointer tlwd-p-0 tlwd-m-0 tlwd-outline-none tlwd-border-none"
                 type="button"
-                on:click={() => {
-                  showConfig = true;
-                }}
+                on:click={openSettings}
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"

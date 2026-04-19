@@ -129,3 +129,84 @@ describe('background-helpers', () => {
     });
   });
 });
+
+import {
+  getAnthropicRequestBody,
+  normalizeAnthropicModelsResponse,
+  normalizeAnthropicSseChunk,
+} from './background-helpers.js';
+
+describe('getAnthropicRequestBody', () => {
+  it('extracts system message to top-level field', () => {
+    const messages = [
+      { role: 'system', content: 'You are helpful.' },
+      { role: 'user', content: 'Hi' },
+    ];
+    const body = getAnthropicRequestBody('claude-sonnet-4-6', messages, true);
+    expect(body.system).toBe('You are helpful.');
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].role).toBe('user');
+    expect(body.stream).toBe(true);
+    expect(body.max_tokens).toBe(8096);
+    expect(body.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('handles messages with no system message', () => {
+    const messages = [{ role: 'user', content: 'Hello' }];
+    const body = getAnthropicRequestBody('claude-haiku-4-5', messages, false);
+    expect(body.system).toBeUndefined();
+    expect(body.messages).toHaveLength(1);
+    expect(body.stream).toBe(false);
+  });
+});
+
+describe('normalizeAnthropicModelsResponse', () => {
+  it('converts Anthropic models list to OpenAI-compatible format', () => {
+    const anthropicResponse = {
+      data: [
+        { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' },
+        { id: 'claude-opus-4-7', display_name: 'Claude Opus 4.7' },
+        { id: 'claude-haiku-4-5-20251001', display_name: 'Claude Haiku' },
+      ],
+    };
+    const result = normalizeAnthropicModelsResponse(anthropicResponse);
+    expect(result.data.data).toHaveLength(3);
+    expect(result.data.data[0]).toEqual({ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' });
+  });
+
+  it('filters out non-claude models', () => {
+    const anthropicResponse = {
+      data: [
+        { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet' },
+        { id: 'other-model', display_name: 'Other' },
+      ],
+    };
+    const result = normalizeAnthropicModelsResponse(anthropicResponse);
+    expect(result.data.data).toHaveLength(1);
+    expect(result.data.data[0].id).toBe('claude-sonnet-4-6');
+  });
+});
+
+describe('normalizeAnthropicSseChunk', () => {
+  it('converts content_block_delta text_delta to OpenAI chunk format', () => {
+    const line = 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}';
+    const result = normalizeAnthropicSseChunk(line);
+    expect(result).toBe('data: {"choices":[{"delta":{"content":"Hello"}}]}');
+  });
+
+  it('converts message_stop to OpenAI [DONE]', () => {
+    const line = 'data: {"type":"message_stop"}';
+    const result = normalizeAnthropicSseChunk(line);
+    expect(result).toBe('data: [DONE]');
+  });
+
+  it('returns null for other event types', () => {
+    const line = 'data: {"type":"message_start","message":{}}';
+    expect(normalizeAnthropicSseChunk(line)).toBeNull();
+  });
+
+  it('returns null for non-data lines', () => {
+    expect(normalizeAnthropicSseChunk('event: content_block_delta')).toBeNull();
+    expect(normalizeAnthropicSseChunk('')).toBeNull();
+  });
+});

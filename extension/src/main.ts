@@ -8,6 +8,7 @@
 
 import "./app.css";
 import App from "./App.svelte";
+import { loadAndApplyAppearance } from "./lib/appearance";
 
 function initApp(): InstanceType<typeof App> | null {
   // Only initialize in main frame to avoid duplicate processing when all_frames: true
@@ -27,6 +28,7 @@ function initApp(): InstanceType<typeof App> | null {
       return targetElement.__svelte_app as InstanceType<typeof App>;
     }
 
+    loadAndApplyAppearance().catch(() => {});
     const app = new App({
       target: targetElement,
     });

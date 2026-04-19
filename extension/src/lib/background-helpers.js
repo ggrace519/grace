@@ -62,3 +62,49 @@ export function getRateLimitKey(actionType) {
   if (actionType === 'chatCompletion' || actionType === 'fetchModels') return actionType;
   return 'general';
 }
+
+/**
+ * Builds the Anthropic API request body from a messages array.
+ * Extracts any system message to the top-level `system` field.
+ */
+export function getAnthropicRequestBody(model, messages, stream) {
+  const systemMsg = messages.find((m) => m.role === 'system');
+  const userMessages = messages.filter((m) => m.role !== 'system');
+  const body = { model, messages: userMessages, max_tokens: 8096, stream };
+  if (systemMsg) body.system = systemMsg.content;
+  return body;
+}
+
+/**
+ * Converts Anthropic GET /v1/models response to the shape getModels() expects:
+ * { data: { data: [{id, name}] } }
+ */
+export function normalizeAnthropicModelsResponse(anthropicResponse) {
+  const models = (anthropicResponse.data || [])
+    .filter((m) => m.id && m.id.startsWith('claude-'))
+    .map((m) => ({ id: m.id, name: m.display_name || m.id }));
+  return { data: { data: models } };
+}
+
+/**
+ * Converts a single Anthropic SSE line to OpenAI-compatible format.
+ * Returns the normalized line string, or null if the line should be skipped.
+ */
+export function normalizeAnthropicSseChunk(line) {
+  if (!line || !line.startsWith('data: ')) return null;
+  const jsonStr = line.slice(6);
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+  if (parsed.type === 'message_stop') return 'data: [DONE]';
+  if (
+    parsed.type === 'content_block_delta' &&
+    parsed.delta?.type === 'text_delta'
+  ) {
+    return `data: ${JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] })}`;
+  }
+  return null;
+}

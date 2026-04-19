@@ -1,61 +1,47 @@
-// ============================================================================
-// Sidebar Entry Point
-// ============================================================================
-// This file serves as the entry point for the Chrome Side Panel.
-// It mounts the same App component but in sidebar mode.
-// ============================================================================
-
 import "./app.css";
 import App from "./App.svelte";
-
-console.log("Sidebar: Starting initialization...");
+import { loadAndApplyAppearance, applyAppearance, DEFAULT_APPEARANCE } from "./lib/appearance";
+import type { AppearanceSettings } from "./lib/storage";
 
 function initSidebar(): InstanceType<typeof App> | null {
-  console.log("Sidebar: initSidebar called");
-
-  // Check global flag to prevent multiple initializations
-  if (window.__openwebui_sidebar_initialized) {
-    console.log("Sidebar: Already initialized, skipping");
-    return null;
-  }
+  if ((window as any).__openwebui_sidebar_initialized) return null;
 
   const targetElement = document.getElementById("extension-app");
-  console.log("Sidebar: Target element:", targetElement);
 
   if (targetElement) {
-    // Check if app is already mounted on this element
-    if (targetElement.__svelte_app) {
-      console.log("Sidebar: App already mounted");
-      return targetElement.__svelte_app as InstanceType<typeof App>;
+    if ((targetElement as any).__svelte_app) {
+      return (targetElement as any).__svelte_app as InstanceType<typeof App>;
     }
 
-    console.log("Sidebar: Creating new App instance with sidebarMode: true");
+    loadAndApplyAppearance().catch(() => {});
+
     const app = new App({
       target: targetElement,
-      props: {
-        sidebarMode: true
+      props: { sidebarMode: true },
+    });
+    (targetElement as any).__svelte_app = app;
+    (window as any).__openwebui_sidebar_initialized = true;
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'sync' && changes.appearance) {
+        const newValue = changes.appearance.newValue as Partial<AppearanceSettings> | undefined;
+        const updated: AppearanceSettings = {
+          ...DEFAULT_APPEARANCE,
+          ...(newValue ?? {}),
+        };
+        applyAppearance(updated);
       }
     });
-    // Store reference to prevent duplicate mounts
-    targetElement.__svelte_app = app;
-    // Set global flag to prevent re-initialization
-    window.__openwebui_sidebar_initialized = true;
-    console.log("Sidebar: App initialized successfully");
+
     return app;
   } else {
-    console.warn("Extension sidebar target element not found, retrying...");
     setTimeout(initSidebar, 100);
     return null;
   }
 }
 
-// Wait for DOM to be ready
 if (document.readyState === "loading") {
-  console.log("Sidebar: DOM loading, waiting for DOMContentLoaded");
   document.addEventListener("DOMContentLoaded", initSidebar);
 } else {
-  console.log("Sidebar: DOM already loaded, initializing");
   initSidebar();
 }
-
-export default initSidebar();

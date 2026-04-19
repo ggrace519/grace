@@ -29,7 +29,8 @@
       "Bash(wsl -e bash -lc 'env | grep -i node')",
       "Bash(wsl -e bash -lc 'cd /home/ggrace/coding-projects/extension/extension && PATH=$\\(echo $PATH | tr : \"\"\\\\n\"\" | grep -v \"\"/mnt/c\"\" | tr \"\"\\\\n\"\" : | sed \"\"s/:$//\"\"\\) && npm install 2>&1')",
       "Write",
-      "Commands"
+      "Commands",
+      "Bash(done:*)"
     ]
   }
 }

@@ -20,53 +20,52 @@ describe('apis', () => {
   });
 
   describe('getModels', () => {
-    it('rejects when Chrome API is unavailable', async () => {
+    it('resolves with error when Chrome API is unavailable', async () => {
       vi.stubGlobal('chrome', undefined);
-      await expect(getModels('key', 'https://example.com')).rejects.toThrow(
-        /Chrome APIs not available|Extension context invalidated/
-      );
+      const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
+      expect(result).toHaveProperty('error');
+      expect(result.error).toMatch(/Chrome APIs not available|Extension context invalidated/);
     });
 
-    it('rejects when chrome.runtime.sendMessage is missing', async () => {
+    it('resolves with error when chrome.runtime.sendMessage is missing', async () => {
       vi.stubGlobal('chrome', { runtime: { id: 'x' }, storage: {} });
-      await expect(getModels('key', 'https://example.com')).rejects.toThrow(
-        /Chrome APIs not available|Extension context invalidated/
-      );
+      const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
+      expect(result).toHaveProperty('error');
+      expect(result.error).toMatch(/Chrome APIs not available|Extension context invalidated/);
     });
 
-    it('resolves with sorted models on success', async () => {
+    it('resolves with raw response on success', async () => {
       chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
         cb({ data: { data: [{ name: 'Zebra' }, { name: 'alpha' }] } });
       });
-      const models = await getModels('key', 'https://example.com');
-      expect(models).toHaveLength(2);
-      expect(models[0].name).toBe('alpha');
-      expect(models[1].name).toBe('Zebra');
+      const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
+      expect(result).toEqual({ data: { data: [{ name: 'Zebra' }, { name: 'alpha' }] } });
     });
 
-    it('rejects on response error', async () => {
+    it('resolves with error object on response error', async () => {
       chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
         cb({ error: 'Invalid URL' });
       });
-      await expect(getModels('key', 'https://example.com')).rejects.toThrow('Invalid URL');
+      const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
+      expect(result).toEqual({ error: 'Invalid URL' });
     });
 
-    it('rejects on chrome.runtime.lastError', async () => {
+    it('resolves with error on chrome.runtime.lastError', async () => {
       chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
         chrome.runtime.lastError = { message: 'Could not establish connection' };
         cb(undefined);
       });
-      await expect(getModels('key', 'https://example.com')).rejects.toThrow(
-        'Could not establish connection'
-      );
+      const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
+      expect(result).toHaveProperty('error');
+      expect(result.error).toMatch(/Could not establish connection/);
     });
 
-    it('returns empty array when data is missing', async () => {
+    it('resolves with empty object when response has no data', async () => {
       chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
         cb({});
       });
-      const models = await getModels('key', 'https://example.com');
-      expect(models).toEqual([]);
+      const result = await getModels('pid', 'openai-compatible', 'https://example.com', 'key');
+      expect(result).toEqual({});
     });
   });
 

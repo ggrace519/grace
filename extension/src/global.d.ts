@@ -6,6 +6,7 @@ declare global {
   interface Window {
     __openwebui_extension_initialized?: boolean;
     __openwebui_sidebar_initialized?: boolean;
+    __grace_settings_initialized?: boolean;
     openWebUIToggleSearch?: () => void;
   }
   interface HTMLElement {

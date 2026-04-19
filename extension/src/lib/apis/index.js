@@ -1,11 +1,22 @@
-// Helper function to check if Chrome APIs are available
+// Use multiple globals so Chrome API is found in content scripts and extension pages.
+const getChrome = () => {
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.chrome) return globalThis.chrome;
+    if (typeof self !== "undefined" && self.chrome) return self.chrome;
+    if (typeof window !== "undefined" && window.chrome) return window.chrome;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const isChromeAPIAvailable = () => {
   try {
-    return typeof chrome !== 'undefined' &&
-           chrome !== null &&
-           typeof chrome.runtime !== 'undefined' &&
-           chrome.runtime !== null &&
-           typeof chrome.runtime.sendMessage !== 'undefined';
+    const c = getChrome();
+    return c != null &&
+           typeof c.runtime !== 'undefined' &&
+           c.runtime != null &&
+           typeof c.runtime.sendMessage === 'function';
   } catch {
     return false;
   }
@@ -89,58 +100,132 @@ export function withErrorHandling(apiCall) {
   };
 }
 
-export const getModels = async (key, url) => {
-  // Check Chrome API availability
-  if (!isChromeAPIAvailable()) {
+const isMessagePortClosedError = (err) => {
+  const msg = err?.message || String(err);
+  return msg.includes("message port closed") || msg.includes("Message port closed");
+};
+
+// Send message to background with retries (handles service worker wake-up / port timeout).
+function sendMessageWithRetry(message, maxRetries = 6) {
+  const c = getChrome();
+  if (!c?.runtime?.sendMessage) {
     return Promise.reject(new Error("Extension context invalidated - Chrome APIs not available"));
   }
-
-  // Proxy through background script to avoid CORS
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(
-      {
-        action: "fetchModels",
-        url: url,
-        key: key,
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          const errorMessage = chrome.runtime.lastError.message;
-          reject(new Error(errorMessage));
+    let attempts = 0;
+    const send = () => {
+      c.runtime.sendMessage(message, (response) => {
+        const lastError = c.runtime?.lastError;
+        if (lastError) {
+          const msg = lastError.message || "";
+          if (isMessagePortClosedError(msg) && attempts < maxRetries) {
+            attempts += 1;
+            setTimeout(send, 300 * attempts);
+            return;
+          }
+          reject(new Error(msg));
           return;
         }
-        if (response.error) {
-          reject(new Error(response.error));
-          return;
-        }
-
-        let models = response.data?.data ?? [];
-        models = models
-          .filter((models) => models)
-          .sort((a, b) => {
-            // Compare case-insensitively
-            const lowerA = a.name.toLowerCase();
-            const lowerB = b.name.toLowerCase();
-
-            if (lowerA < lowerB) return -1;
-            if (lowerA > lowerB) return 1;
-
-            // If same case-insensitively, sort by original strings,
-            // lowercase will come before uppercase due to ASCII values
-            if (a < b) return -1;
-            if (a > b) return 1;
-
-            return 0; // They are equal
-          });
-
-        // Log model count instead of full array to reduce console noise
-        if (models.length > 0) {
-          console.debug(`Extension: Loaded ${models.length} model(s)`);
-        }
-        resolve(models);
-      }
-    );
+        resolve(response);
+      });
+    };
+    send();
   });
+}
+
+/** Wake the service worker so a follow-up message is less likely to hit "message port closed". */
+export const pingSidebarWake = () => {
+  const c = getChrome();
+  if (!c?.runtime?.sendMessage) return Promise.resolve();
+  return sendMessageWithRetry({ action: "ping" }, 4).catch(() => {});
+};
+
+export async function getModels(providerId, providerType, url, encryptedKey) {
+  try {
+    const response = await sendMessageWithRetry(
+      { action: 'fetchModels', providerId, providerType, url: url || '', key: encryptedKey }
+    );
+    if (!response) {
+      return { error: 'Failed to fetch models' };
+    }
+    return response;
+  } catch (e) {
+    return { error: e?.message || 'Failed to fetch models' };
+  }
+}
+
+/**
+ * Decrypt API key via background (with retry on port closed).
+ * @param {string} encryptedApiKey
+ * @returns {Promise<{ decrypted?: string, error?: string }>}
+ */
+export const decryptApiKeyFromBackground = async (encryptedApiKey) => {
+  try {
+    const response = await sendMessageWithRetry({
+      action: "decryptApiKey",
+      encryptedApiKey: encryptedApiKey,
+    });
+    return response || {};
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+};
+
+/**
+ * Encrypt API key via background (with retry on port closed). Use when saving config.
+ * @param {string} apiKey
+ * @returns {Promise<{ encrypted?: string, error?: string }>}
+ */
+export const encryptApiKeyViaBackground = async (apiKey) => {
+  try {
+    const response = await sendMessageWithRetry({
+      action: "encryptApiKey",
+      apiKey: apiKey,
+    });
+    return response || {};
+  } catch (e) {
+    return { error: e?.message || String(e) };
+  }
+};
+
+/**
+ * Single round-trip for sidebar init: returns config from background (multi-provider schema).
+ * The key is already decrypted by the background. Fetch models and pageContent separately.
+ * @returns {Promise<{ providers?, activeProviderId?, activeModel?, providerType?, url?, key?, error? }>}
+ */
+export async function getSidebarInit() {
+  try {
+    const response = await sendMessageWithRetry({ action: 'getSidebarInit' });
+    if (!response) {
+      return { error: 'No response' };
+    }
+    return response;
+  } catch (e) {
+    return { error: e?.message || 'No response' };
+  }
+}
+
+/**
+ * Get the main text content of the currently active browser tab.
+ * Used by the sidebar to include page context in the conversation.
+ * Always attempts the message send so the side panel (extension context) can get page content
+ * even if isChromeAPIAvailable() is false due to timing or environment.
+ * @returns {Promise<{ data?: string, error?: string }>}
+ */
+export const getActiveTabPageContent = async () => {
+  try {
+    const c = getChrome();
+    if (!c?.runtime?.sendMessage) {
+      return { error: "Chrome APIs not available" };
+    }
+    const response = await sendMessageWithRetry({ action: "getActiveTabPageContent" });
+    if (response?.error) {
+      return { error: response.error };
+    }
+    return { data: response?.data ?? "" };
+  } catch (e) {
+    return { error: (e?.message && String(e.message)) || "Chrome APIs not available" };
+  }
 };
 
 export const generateOpenAIChatCompletion = async (
@@ -148,14 +233,14 @@ export const generateOpenAIChatCompletion = async (
   body = {},
   url = "http://localhost:8080"
 ) => {
-  // Check Chrome API availability
-  if (!isChromeAPIAvailable() || typeof chrome.runtime.connect === 'undefined') {
+  const c = getChrome();
+  if (!c?.runtime?.connect) {
     return Promise.reject(new Error("Extension context invalidated - Chrome runtime.connect not available"));
   }
-  
+
   // Create a port for streaming data from background script
   return new Promise((resolve, reject) => {
-    const port = chrome.runtime.connect({ name: "chat-stream" });
+    const port = c.runtime.connect({ name: "chat-stream" });
     let controller = null;
     let streamEnded = false;
     

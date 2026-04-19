@@ -1,3 +1,71 @@
+/* ============================================================
+   Grace Design Tokens
+   ============================================================ */
+
+:root {
+  /* Backgrounds */
+  --grace-bg: #111111;
+  --grace-bg-surface: #1a1a1a;
+  --grace-bg-input: #222222;
+  --grace-border: #2a2a2a;
+
+  /* Text */
+  --grace-text: #ffffff;
+  --grace-text-muted: #aaaaaa;
+  --grace-text-faint: #555555;
+
+  /* Accent (overridden at runtime by applyAppearance) */
+  --grace-accent: #4ade80;
+  --grace-accent-bg: rgba(74, 222, 128, 0.12);
+
+  /* Density: normal (default) */
+  --grace-gap-sm: 6px;
+  --grace-gap-md: 12px;
+  --grace-gap-lg: 24px;
+  --grace-font-xs: 10px;
+  --grace-font-sm: 11px;
+  --grace-font-md: 13px;
+  --grace-font-lg: 16px;
+
+  /* Tailwind gray hooks (used by Tailwind config for gray-900/950) */
+  --color-gray-900: #171717;
+  --color-gray-950: #0d0d0d;
+}
+
+/* Light theme overrides */
+[data-grace-theme="light"] {
+  --grace-bg: #f5f5f5;
+  --grace-bg-surface: #ffffff;
+  --grace-bg-input: #eeeeee;
+  --grace-border: #d4d4d4;
+  --grace-text: #111111;
+  --grace-text-muted: #555555;
+  --grace-text-faint: #999999;
+  --color-gray-900: #f5f5f5;
+  --color-gray-950: #efefef;
+}
+
+/* Density overrides */
+[data-grace-density="compact"] {
+  --grace-gap-sm: 4px;
+  --grace-gap-md: 8px;
+  --grace-gap-lg: 16px;
+  --grace-font-xs: 9px;
+  --grace-font-sm: 10px;
+  --grace-font-md: 12px;
+  --grace-font-lg: 14px;
+}
+
+[data-grace-density="comfortable"] {
+  --grace-gap-sm: 10px;
+  --grace-gap-md: 16px;
+  --grace-gap-lg: 32px;
+  --grace-font-xs: 11px;
+  --grace-font-sm: 12px;
+  --grace-font-md: 14px;
+  --grace-font-lg: 18px;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

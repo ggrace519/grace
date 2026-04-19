@@ -145,7 +145,7 @@ function isValidUrl(urlString) {
 // Whitelist of allowed message actions to prevent unauthorized actions from
 // content scripts or malicious code injection.
 // ============================================================================
-const ALLOWED_ACTIONS = ['getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'summarizePage', 'explainText', 'openSidePanel'];
+const ALLOWED_ACTIONS = ['ping', 'getSelection', 'writeText', 'fetchModels', 'toggleSearch', 'encryptApiKey', 'decryptApiKey', 'createChat', 'extractPageContent', 'getActiveTabPageContent', 'getSidebarInit', 'summarizePage', 'explainText', 'openSidePanel', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
 
 // ============================================================================
 // ENHANCEMENT: Rate Limiting
@@ -505,6 +505,92 @@ async function handleExtractPageContent(tabId) {
   }
 }
 
+// Key for storing which tab's context the side panel should use (session only)
+const SIDE_PANEL_CONTEXT_TAB_KEY = "sidePanelContextTabId";
+// In-memory so getActiveTabPageContent can read it without awaiting storage (avoids message port timeout)
+let sidePanelContextTabIdMemory = null;
+
+/** Returns the tab id the side panel should use for context (memory, session, or current tab). */
+async function getContextTabId() {
+  const tryUseTabId = async (id) => {
+    if (id == null) return null;
+    try {
+      const tab = await chrome.tabs.get(id);
+      if (tab && tab.id && tab.url) {
+        const u = tab.url;
+        if (!u.startsWith("chrome://") && !u.startsWith("chrome-extension://") && !u.startsWith("edge://") && !u.startsWith("about:")) {
+          return tab.id;
+        }
+      }
+    } catch (_) {}
+    return null;
+  };
+  let tabId = await tryUseTabId(sidePanelContextTabIdMemory);
+  if (tabId != null) return tabId;
+  const stored = await chrome.storage.session.get(SIDE_PANEL_CONTEXT_TAB_KEY).catch(() => ({}));
+  tabId = await tryUseTabId(stored[SIDE_PANEL_CONTEXT_TAB_KEY]);
+  if (tabId != null) return tabId;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tabs && tabs[0] && tabs[0].id) return tabs[0].id;
+  const fallback = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return (fallback && fallback[0] && fallback[0].id) ? fallback[0].id : null;
+}
+
+/** Get page content for a given tab (content script first, then executeScript). */
+async function getPageContentForTabId(tabId) {
+  if (!tabId) return { error: "No tab" };
+  try {
+    const contentScriptResponse = await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, { action: "getPageContent" }, (response) => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve(response);
+      });
+    });
+    if (contentScriptResponse && (contentScriptResponse.data !== undefined || contentScriptResponse.error)) {
+      const data = contentScriptResponse.data ?? "";
+      const trimmed = typeof data === "string" ? data.trim() : "";
+      if (trimmed.length >= 50) return { data: contentScriptResponse.data };
+      if (contentScriptResponse.error) return { error: contentScriptResponse.error };
+    }
+  } catch (_) {}
+  return await handleExtractPageContent(tabId);
+}
+
+function runToggleSearchForTab(tab, focusTab = false) {
+  if (!tab || !tab.id) return;
+  const url = tab.url || "";
+  if (url.startsWith("chrome://") ||
+      url.startsWith("chrome-extension://") ||
+      url.startsWith("chrome-search://") ||
+      url.startsWith("edge://") ||
+      url.startsWith("about:")) {
+    return;
+  }
+  const tabId = tab.id;
+  const doSend = () => {
+    chrome.tabs.sendMessage(tabId, { action: "toggleSearch" }).catch(() => {
+      chrome.scripting.executeScript({
+        target: { tabId: tabId, allFrames: false },
+        func: () => {
+          window.dispatchEvent(new CustomEvent("open-webui-toggle-search", { bubbles: true }));
+          if (window.openWebUIToggleSearch && typeof window.openWebUIToggleSearch === "function") {
+            try {
+              window.openWebUIToggleSearch();
+            } catch (e) {}
+          }
+        }
+      }).catch(() => {});
+    });
+  };
+  if (focusTab && tab.windowId) {
+    chrome.tabs.update(tabId, { active: true }).then(() => {
+      return chrome.windows.update(tab.windowId, { focused: true });
+    }).then(doSend).catch(doSend);
+  } else {
+    doSend();
+  }
+}
+
 // ============================================================================
 // ENHANCEMENT: Keyboard Shortcut Handling via Commands API
 // ============================================================================
@@ -551,9 +637,23 @@ chrome.commands.onCommand.addListener(function (command) {
       }
     });
   } else if (command === "open-sidebar") {
-    // Open the side panel
-    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
-      console.error("Error opening side panel:", err);
+    // Open immediately (user gesture); set context tab after.
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT });
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = (tabs && tabs[0]) ? tabs[0] : null;
+      const tabId = tab ? tab.id : null;
+      if (tabId != null) {
+        sidePanelContextTabIdMemory = tabId;
+        chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
+      } else {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (ft) => {
+          const id = (ft && ft[0]) ? ft[0].id : null;
+          if (id != null) {
+            sidePanelContextTabIdMemory = id;
+            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: id }).catch(() => {});
+          }
+        });
+      }
     });
   }
 });
@@ -577,24 +677,24 @@ function registerContextMenus() {
 
     setTimeout(() => {
       chrome.contextMenus.create({
-        id: 'openwebui-extension',
-        title: 'OpenWebUI Extension',
-        contexts: ['page', 'selection', 'editable']
+        id: 'ai-extension',
+        title: 'AI Extension',
+        contexts: ['all']
       }, () => {
         if (chrome.runtime.lastError) {
-          console.error("Extension: Error creating OpenWebUI Extension context menu:", chrome.runtime.lastError.message);
+          console.error("Extension: Error creating AI Extension context menu:", chrome.runtime.lastError.message);
           isRegisteringMenus = false;
           return;
         }
 
-        console.log("Extension: OpenWebUI Extension context menu created successfully");
+        console.log("Extension: AI Extension context menu created successfully");
 
         setTimeout(() => {
           chrome.contextMenus.create({
             id: 'summarize-page',
-            parentId: 'openwebui-extension',
+            parentId: 'ai-extension',
             title: 'Summarize Page',
-            contexts: ['page', 'selection']
+            contexts: ['all']
           }, () => {
             if (chrome.runtime.lastError) {
               console.error("Extension: Error creating summarize context menu:", chrome.runtime.lastError.message);
@@ -605,7 +705,7 @@ function registerContextMenus() {
 
           chrome.contextMenus.create({
             id: 'explain-text',
-            parentId: 'openwebui-extension',
+            parentId: 'ai-extension',
             title: 'Explain This',
             contexts: ['selection']
           }, () => {
@@ -616,17 +716,42 @@ function registerContextMenus() {
             }
           });
 
-          // Add "Open Sidebar" context menu
+          chrome.contextMenus.create({
+            id: 'open-search',
+            parentId: 'ai-extension',
+            title: 'Open search',
+            contexts: ['all']
+          }, () => {
+            if (chrome.runtime.lastError) {
+              console.error("Extension: Error creating open search context menu:", chrome.runtime.lastError.message);
+            } else {
+              console.log("Extension: Open search context menu created successfully");
+            }
+          });
+
           chrome.contextMenus.create({
             id: 'open-sidebar',
-            parentId: 'openwebui-extension',
-            title: 'Open Sidebar',
-            contexts: ['page', 'selection']
+            parentId: 'ai-extension',
+            title: 'Open sidebar',
+            contexts: ['all']
           }, () => {
             if (chrome.runtime.lastError) {
               console.error("Extension: Error creating open sidebar context menu:", chrome.runtime.lastError.message);
             } else {
               console.log("Extension: Open sidebar context menu created successfully");
+            }
+          });
+
+          chrome.contextMenus.create({
+            id: 'open-settings',
+            parentId: 'ai-extension',
+            title: 'Settings',
+            contexts: ['all']
+          }, () => {
+            if (chrome.runtime.lastError) {
+              console.error("Extension: Error creating settings context menu:", chrome.runtime.lastError.message);
+            } else {
+              console.log("Extension: Settings context menu created successfully");
             }
           });
         }, 50);
@@ -643,21 +768,67 @@ function registerContextMenus() {
 chrome.runtime.onInstalled.addListener((details) => {
   console.log("Extension: onInstalled event:", details.reason);
   registerContextMenus();
+
+  // Migrate old {url, key, model} schema to multi-provider schema
+  chrome.storage.local.get(null, (allData) => {
+    if (Array.isArray(allData.providers)) return; // already migrated
+    if (!allData.url && !allData.key) return;      // nothing to migrate
+
+    const id = crypto.randomUUID();
+    const newSchema = {
+      providers: [{
+        id,
+        name: 'My OpenAI Service',
+        type: 'openai-compatible',
+        encryptedKey: allData.key ?? '',
+        url: allData.url || null,
+      }],
+      activeProviderId: id,
+      activeModel: allData.model ?? '',
+    };
+    chrome.storage.local.set(newSchema, () => {
+      chrome.storage.local.remove(['url', 'key', 'model']);
+    });
+  });
 });
 
 // Register on startup
 chrome.runtime.onStartup.addListener(() => {
   console.log("Extension: Chrome started, ensuring context menus exist");
   registerContextMenus();
+
+  chrome.storage.local.get(null, (allData) => {
+    if (Array.isArray(allData.providers)) return;
+    if (!allData.url && !allData.key) return;
+    const id = crypto.randomUUID();
+    const newSchema = {
+      providers: [{
+        id,
+        name: 'My OpenAI Service',
+        type: 'openai-compatible',
+        encryptedKey: allData.key ?? '',
+        url: allData.url || null,
+      }],
+      activeProviderId: id,
+      activeModel: allData.model ?? '',
+    };
+    chrome.storage.local.set(newSchema, () => {
+      chrome.storage.local.remove(['url', 'key', 'model']);
+    });
+  });
 });
 
 // ============================================================================
-// ENHANCEMENT: Extension Icon Click Handler
+// ENHANCEMENT: Extension Icon Click Handler (only when no popup)
 // ============================================================================
-// Open side panel when clicking the extension toolbar icon
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.action.onClicked.addListener((tab) => {
   try {
-    await chrome.sidePanel.open({ tabId: tab.id });
+    // Must open synchronously in this handler (user gesture); storage can run after.
+    chrome.sidePanel.open({ tabId: tab.id });
+    if (tab && tab.id != null) {
+      sidePanelContextTabIdMemory = tab.id;
+      chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
+    }
   } catch (error) {
     console.error("Error opening side panel:", error);
   }
@@ -769,49 +940,100 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         console.error("Extension: Error injecting explain text script:", err);
       });
     });
-  } else if (info.menuItemId === 'open-sidebar') {
-    // Open the side panel
-    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).catch((err) => {
-      console.error("Error opening side panel:", err);
+  } else if (info.menuItemId === 'open-search') {
+    if (!tab || !tab.id) return;
+    const url = tab.url || "";
+    if (url.startsWith("chrome://") ||
+        url.startsWith("chrome-extension://") ||
+        url.startsWith("chrome-search://") ||
+        url.startsWith("edge://") ||
+        url.startsWith("about:")) {
+      console.log("Extension cannot access this page:", url);
+      return;
+    }
+    chrome.tabs.sendMessage(tab.id, { action: "toggleSearch" }).then(() => {
+      console.log("Extension: Open search message sent to tab");
+    }).catch((error) => {
+      console.log("Open search message failed, trying script injection:", error);
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        func: () => {
+          window.dispatchEvent(new CustomEvent("open-webui-toggle-search", { bubbles: true }));
+          if (window.openWebUIToggleSearch && typeof window.openWebUIToggleSearch === "function") {
+            try {
+              window.openWebUIToggleSearch();
+            } catch (e) {
+              console.error("Extension: Error calling toggle function:", e);
+            }
+          }
+        }
+      }).catch((err) => {
+        if (err.message && err.message.includes("Cannot access contents")) {
+          console.log("Extension: Page cannot be accessed (restricted page)");
+        } else {
+          console.error("Extension: Error injecting open search script:", err);
+        }
+      });
     });
+  } else if (info.menuItemId === 'open-sidebar') {
+    // Open immediately (user gesture); set context tab after.
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT });
+    if (tab && tab.id != null) {
+      sidePanelContextTabIdMemory = tab.id;
+      chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tab.id }).catch(() => {});
+    }
+  } else if (info.menuItemId === 'open-settings') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('extension/dist/settings.html') });
+    return;
   }
 });
 
 // ============================================================================
 // ENHANCEMENT: Message Handler
 // ============================================================================
-chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
-  // Validate message action
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+  // Validate message action (sync — must complete before any await so the port stays open)
   if (!request.action || !ALLOWED_ACTIONS.includes(request.action)) {
     console.error("Extension: Invalid action:", request.action);
     sendResponse({ error: "Invalid action" });
     return false;
   }
 
-  // Validate sender - allow certain actions without tab validation
-  const actionsWithoutTab = ['fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel'];
-  const needsTab = !actionsWithoutTab.includes(request.action);
-
-  // For actions that need a tab, try to get it from the message or query active tab
-  let id = sender?.tab?.id;
-  if (needsTab && !id) {
-    // Try to get the active tab
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs && tabs[0]) {
-        id = tabs[0].id;
-      }
-    } catch (e) {
-      // Continue without tab ID
-    }
-  }
-
-  // If action needs a tab but we don't have one, return error
-  if (needsTab && !id) {
-    console.error("Extension: No tab available for action:", request.action);
-    sendResponse({ error: "No tab available" });
+  // Ping: wake service worker; reply immediately (sync — no async needed).
+  if (request.action === "ping") {
+    sendResponse({ pong: true });
     return false;
   }
+
+  // All remaining handlers are async. Run them in an IIFE and return true
+  // synchronously so Chrome keeps the message port open for sendResponse.
+  // (Declaring the listener itself as `async` returns a Promise, which Chrome
+  //  treats as a non-true return value and immediately closes the port.)
+  (async () => {
+    // Validate sender - allow certain actions without tab validation
+    const actionsWithoutTab = ['ping', 'getSidebarInit', 'fetchModels', 'encryptApiKey', 'decryptApiKey', 'openSidePanel', 'getActiveTabPageContent', 'openSearchFromPopup', 'openSidebarFromPopup', 'openSettings', 'saveProvider', 'deleteProvider', 'setActiveProvider', 'setActiveModel', 'decryptProviderKey', 'saveAppearance'];
+    const needsTab = !actionsWithoutTab.includes(request.action);
+
+    // For actions that need a tab, try to get it from the message or query active tab
+    let id = sender?.tab?.id;
+    if (needsTab && !id) {
+      // Try to get the active tab
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs && tabs[0]) {
+          id = tabs[0].id;
+        }
+      } catch (e) {
+        // Continue without tab ID
+      }
+    }
+
+    // If action needs a tab but we don't have one, return error
+    if (needsTab && !id) {
+      console.error("Extension: No tab available for action:", request.action);
+      sendResponse({ error: "No tab available" });
+      return;
+    }
 
   if (request.action == "getSelection") {
     chrome.scripting
@@ -823,6 +1045,9 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
       })
       .then((res) => {
         sendResponse({ data: res[0]["result"] });
+      })
+      .catch((err) => {
+        sendResponse({ error: getUserFriendlyErrorMessage(err) });
       });
     return true;
   } else if (request.action == "writeText") {
@@ -880,89 +1105,103 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     sendResponse({});
   } else if (request.action == "fetchModels") {
     (async () => {
-      // Validate URL
-      if (!isValidUrl(request.url)) {
-        sendResponse({ error: "Invalid URL format" });
-        return;
-      }
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      const { url, key, rawKey, providerType } = request;
 
-      // Validate API key format
-      if (request.key && typeof request.key !== 'string') {
-        sendResponse({ error: "Invalid API key format" });
-        return;
-      }
-
-      // Decrypt API key if provided
-      let decryptedKey = request.key;
-      if (request.key) {
+      // rawKey is used from the Settings form (unencrypted, typed by user)
+      // key is the encrypted key from storage (needs decryption)
+      let decryptedKey = '';
+      if (rawKey) {
+        decryptedKey = rawKey;
+      } else if (key) {
         try {
-          decryptedKey = await decryptApiKey(request.key);
-        } catch (error) {
-          console.error("Extension: Failed to decrypt API key for models request:", error);
-          decryptedKey = request.key;
+          decryptedKey = await decryptApiKey(key);
+        } catch (e) {
+          return reply({ error: 'Failed to decrypt API key' });
         }
       }
 
-      // Rate Limiting
-      const rateLimitCheck = await checkRateLimit('fetchModels');
+      const rateLimitCheck = await checkRateLimit("fetchModels");
       if (!rateLimitCheck.allowed) {
-        sendResponse({
-          error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before fetching models again.`
-        });
+        reply({ error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before fetching models again.` });
         return;
       }
 
-      const apiUrl = `${request.url}/api/models`;
-      if (!isValidUrl(apiUrl)) {
-        sendResponse({ error: "Invalid API URL" });
-        return;
-      }
-
-      try {
-        const res = await safeFetch(apiUrl, {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-            ...(decryptedKey && { authorization: `Bearer ${decryptedKey}` }),
-          },
-        });
-
-        validateCSPHeaders(res);
-
-        if (!res.ok) {
-          const error = await res.json();
-          const friendlyError = getUserFriendlyErrorMessage(error);
-          sendResponse({ error: friendlyError });
-          return;
+      if (providerType === 'anthropic') {
+        try {
+          const resp = await fetch('https://api.anthropic.com/v1/models', {
+            headers: {
+              'x-api-key': decryptedKey,
+              'anthropic-version': '2023-06-01',
+            },
+          });
+          if (!resp.ok) {
+            const err = await resp.text().catch(() => '');
+            return reply({ error: `Anthropic models error: ${resp.status} ${err}` });
+          }
+          const anthropicData = await resp.json();
+          const models = (anthropicData.data || [])
+            .filter((m) => m.id && m.id.startsWith('claude-'))
+            .map((m) => ({ id: m.id, name: m.display_name || m.id }));
+          return reply({ data: { data: models } });
+        } catch (e) {
+          return reply({ error: e.message });
         }
-        const data = await res.json();
-        sendResponse({ data: data });
-      } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+      }
+
+      // OpenAI-compatible path
+      const apiUrl = `${url}/api/models`;
+      const validatedUrl = getValidatedFetchUrl(apiUrl);
+      if (!validatedUrl) return reply({ error: 'Invalid server URL' });
+      try {
+        const resp = await fetch(validatedUrl, {
+          headers: { Authorization: `Bearer ${decryptedKey}` },
+        });
+        if (!resp.ok) {
+          const err = await resp.text().catch(() => '');
+          return reply({ error: `Models error: ${resp.status} ${err}` });
+        }
+        const data = await resp.json();
+        return reply({ data });
+      } catch (e) {
+        return reply({ error: e.message });
       }
     })();
     return true;
   } else if (request.action == "encryptApiKey") {
     (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
       try {
         const encrypted = await encryptApiKey(request.apiKey);
-        sendResponse({ encrypted: encrypted });
+        reply({ encrypted: encrypted });
       } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+        reply({ error: getUserFriendlyErrorMessage(error) });
       }
     })();
     return true;
   } else if (request.action == "decryptApiKey") {
     (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
       try {
         const decrypted = await decryptApiKey(request.encryptedApiKey);
-        sendResponse({ decrypted: decrypted });
+        reply({ decrypted: decrypted });
       } catch (error) {
-        const friendlyError = getUserFriendlyErrorMessage(error);
-        sendResponse({ error: friendlyError });
+        reply({ error: getUserFriendlyErrorMessage(error) });
       }
     })();
     return true;
@@ -975,6 +1214,71 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
         const friendlyError = getUserFriendlyErrorMessage(error);
         sendResponse({ error: friendlyError });
       }
+    })();
+    return true;
+  } else if (request.action == "getActiveTabPageContent") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      try {
+        const tabId = await getContextTabId();
+        if (!tabId) {
+          reply({ error: "No active tab" });
+          return;
+        }
+        const tab = await chrome.tabs.get(tabId);
+        const url = tab && tab.url ? tab.url : "";
+        if (url.startsWith("chrome://") || url.startsWith("chrome-extension://") || url.startsWith("edge://") || url.startsWith("about:")) {
+          reply({ error: "Cannot access this page" });
+          return;
+        }
+        const result = await getPageContentForTabId(tabId);
+        reply(result.data !== undefined ? { data: result.data } : { error: result.error || "No content" });
+      } catch (error) {
+        reply({ error: getUserFriendlyErrorMessage(error) });
+      }
+    })();
+    return true;
+  } else if (request.action == "getSidebarInit") {
+    // Config + decrypt only (no tab/page content). Reply as fast as possible to avoid "message port closed".
+    // Sidebar then gets page content and models in separate messages (with retry).
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers', 'activeProviderId', 'activeModel'], async (data) => {
+        const providers = data.providers || [];
+        const activeProviderId = data.activeProviderId || '';
+        const activeModel = data.activeModel || '';
+        const activeProvider = providers.find((p) => p.id === activeProviderId);
+
+        if (!activeProvider) {
+          return reply({ providers, activeProviderId, activeModel, key: '', url: '' });
+        }
+
+        let decryptedKey = '';
+        try {
+          decryptedKey = await decryptApiKey(activeProvider.encryptedKey);
+        } catch (e) {
+          return reply({ error: 'Failed to decrypt API key', providers, activeProviderId, activeModel });
+        }
+
+        reply({
+          providers,
+          activeProviderId,
+          activeModel,
+          providerType: activeProvider.type,
+          url: activeProvider.url || '',
+          key: decryptedKey,
+        });
+      });
     })();
     return true;
   } else if (request.action == "createChat") {
@@ -1032,37 +1336,235 @@ chrome.runtime.onMessage.addListener(async function (request, sender, sendRespon
     })();
     return true;
   } else if (request.action == "openSidePanel") {
-    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(() => {
-      sendResponse({ success: true });
-    }).catch((err) => {
-      sendResponse({ error: err.message });
+    // Note: open() may only be called in response to a user gesture; when invoked via message the gesture is often lost.
+    chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT })
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ error: err && err.message ? err.message : "User gesture required" }));
+    return true;
+  } else if (request.action == "openSearchFromPopup") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const t = (tabs && tabs[0]) ? tabs[0] : null;
+      if (t) {
+        runToggleSearchForTab(t, true);
+        sendResponse({});
+      } else {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (fallbackTabs) => {
+          const ft = (fallbackTabs && fallbackTabs[0]) ? fallbackTabs[0] : null;
+          if (ft) runToggleSearchForTab(ft, true);
+          sendResponse(ft ? {} : { error: "No active tab" });
+        });
+      }
     });
+    return true;
+  } else if (request.action == "openSidebarFromPopup") {
+    // Popup opens the panel itself (user gesture); we only set context tab here.
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const t = (tabs && tabs[0]) ? tabs[0] : null;
+      const tabId = t && t.id != null ? t.id : null;
+      if (tabId != null) {
+        sidePanelContextTabIdMemory = tabId;
+        chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: tabId }).catch(() => {});
+        sendResponse({ success: true });
+      } else {
+        chrome.tabs.query({ active: true, lastFocusedWindow: true }, (ft) => {
+          const id = (ft && ft[0]) ? ft[0].id : null;
+          if (id != null) {
+            sidePanelContextTabIdMemory = id;
+            chrome.storage.session.set({ [SIDE_PANEL_CONTEXT_TAB_KEY]: id }).catch(() => {});
+          }
+          sendResponse({ success: true });
+        });
+      }
+    });
+    return true;
+  } else if (request.action == "openSettings") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.tabs.create({ url: chrome.runtime.getURL('extension/dist/settings.html') });
+      reply({ success: true });
+    })();
+    return true;
+  } else if (request.action === 'saveAppearance') {
+    (() => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      const a = request.appearance;
+      const validThemes = ['dark', 'light', 'system'];
+      const validDensities = ['compact', 'normal', 'comfortable'];
+      const validHex = /^#[0-9a-fA-F]{6}$/;
+      if (
+        a && typeof a === 'object' &&
+        validThemes.includes(a.theme) &&
+        validDensities.includes(a.density) &&
+        typeof a.accentColor === 'string' && validHex.test(a.accentColor)
+      ) {
+        chrome.storage.sync.set({ appearance: { theme: a.theme, density: a.density, accentColor: a.accentColor } }, () => {
+          reply({ ok: true });
+        });
+      } else {
+        reply({ ok: false, error: 'Invalid appearance payload' });
+      }
+    })();
+    return true;
+
+  } else if (request.action == "saveProvider") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers'], async (data) => {
+        let providers = data.providers || [];
+        let encryptedKey;
+        try {
+          encryptedKey = await encryptApiKey(request.provider.rawKey);
+        } catch (e) {
+          return reply({ error: 'Encryption failed' });
+        }
+
+        if (request.provider.id) {
+          // Update existing
+          providers = providers.map((p) =>
+            p.id === request.provider.id
+              ? { ...p, name: request.provider.name, type: request.provider.type, url: request.provider.url || null, encryptedKey }
+              : p
+          );
+        } else {
+          // Create new
+          const newProvider = {
+            id: crypto.randomUUID(),
+            name: request.provider.name,
+            type: request.provider.type,
+            url: request.provider.url || null,
+            encryptedKey,
+          };
+          providers = [...providers, newProvider];
+        }
+
+        chrome.storage.local.set({ providers }, () => reply({ success: true, providers }));
+      });
+    })();
+    return true;
+  } else if (request.action == "deleteProvider") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers', 'activeProviderId'], (data) => {
+        const providers = (data.providers || []).filter((p) => p.id !== request.providerId);
+        const updates = { providers };
+        if (data.activeProviderId === request.providerId) {
+          updates.activeProviderId = providers[0]?.id ?? '';
+        }
+        chrome.storage.local.set(updates, () => reply({ success: true, providers }));
+      });
+    })();
+    return true;
+  } else if (request.action == "setActiveProvider") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.set({ activeProviderId: request.providerId }, () =>
+        reply({ success: true })
+      );
+    })();
+    return true;
+  } else if (request.action == "setActiveModel") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.set({ activeModel: request.model }, () =>
+        reply({ success: true })
+      );
+    })();
+    return true;
+  } else if (request.action == "decryptProviderKey") {
+    (async () => {
+      let responded = false;
+      const reply = (payload) => {
+        if (responded) return;
+        responded = true;
+        try { sendResponse(payload); } catch (e) {}
+      };
+      chrome.storage.local.get(['providers'], async (data) => {
+        const provider = (data.providers || []).find((p) => p.id === request.providerId);
+        if (!provider) return reply({ error: 'Provider not found' });
+        try {
+          const key = await decryptApiKey(provider.encryptedKey);
+          reply({ key });
+        } catch (e) {
+          reply({ error: 'Decryption failed' });
+        }
+      });
+    })();
     return true;
   } else {
     sendResponse({});
   }
-
+  })();
   return true;
 });
 
 // ============================================================================
 // ENHANCEMENT: Streaming Chat Completions via Ports
 // ============================================================================
+function safePortPost(port, message) {
+  try {
+    port.postMessage(message);
+  } catch (e) {
+    if (e?.message && !e.message.includes("disconnected")) {
+      console.error("Extension: port.postMessage error", e);
+    }
+  }
+}
+
+function safePortDisconnect(port) {
+  try {
+    port.disconnect();
+  } catch (e) {
+    if (e?.message && !e.message.includes("disconnected")) {
+      console.error("Extension: port.disconnect error", e);
+    }
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "chat-stream") {
     port.onMessage.addListener(async (msg) => {
       if (msg.action === "fetchChatCompletion") {
         // Validate URL
         if (!isValidUrl(msg.url)) {
-          port.postMessage({ error: "Invalid URL format" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid URL format" });
+          safePortDisconnect(port);
           return;
         }
 
         // Validate API key format
         if (!msg.api_key || typeof msg.api_key !== 'string') {
-          port.postMessage({ error: "Invalid API key format" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid API key format" });
+          safePortDisconnect(port);
           return;
         }
 
@@ -1076,25 +1578,107 @@ chrome.runtime.onConnect.addListener((port) => {
 
         // Validate request body
         if (!msg.body || typeof msg.body !== 'object') {
-          port.postMessage({ error: "Invalid request body" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid request body" });
+          safePortDisconnect(port);
           return;
         }
 
         // Rate Limiting
         const rateLimitCheck = await checkRateLimit('chatCompletion');
         if (!rateLimitCheck.allowed) {
-          port.postMessage({
+          safePortPost(port, {
             error: `Rate limit exceeded. Please wait ${rateLimitCheck.waitTime} seconds before making another request.`
           });
-          port.disconnect();
+          safePortDisconnect(port);
           return;
         }
 
+        if (msg.providerType === 'anthropic') {
+          let decryptedKey = '';
+          try {
+            decryptedKey = await decryptApiKey(msg.key);
+          } catch (e) {
+            safePortPost(port, { error: 'Failed to decrypt API key' });
+            safePortDisconnect(port);
+            return;
+          }
+
+          // Build Anthropic request body: extract system message, set max_tokens
+          const systemMsg = (msg.body.messages || []).find((m) => m.role === 'system');
+          const userMessages = (msg.body.messages || []).filter((m) => m.role !== 'system');
+          const anthropicBody = {
+            model: msg.body.model,
+            messages: userMessages,
+            max_tokens: 8096,
+            stream: true,
+          };
+          if (systemMsg) anthropicBody.system = systemMsg.content;
+
+          let response;
+          try {
+            response = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'x-api-key': decryptedKey,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(anthropicBody),
+            });
+          } catch (e) {
+            safePortPost(port, { error: e.message });
+            safePortDisconnect(port);
+            return;
+          }
+
+          if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            safePortPost(port, { error: `${response.status}: ${errText}` });
+            safePortDisconnect(port);
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // last partial line stays in buffer
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith('data: ')) continue;
+              const jsonStr = trimmed.slice(6);
+              let parsed;
+              try { parsed = JSON.parse(jsonStr); } catch { continue; }
+
+              if (parsed.type === 'message_stop') {
+                safePortPost(port, { line: 'data: [DONE]' });
+                safePortDisconnect(port);
+                return;
+              }
+              if (
+                parsed.type === 'content_block_delta' &&
+                parsed.delta?.type === 'text_delta'
+              ) {
+                const normalized = `data: ${JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] })}`;
+                safePortPost(port, { line: normalized });
+              }
+            }
+          }
+          safePortDisconnect(port);
+          return;
+        }
+        // Existing OpenAI-compatible path continues below...
+
         const apiUrl = `${msg.url}/chat/completions`;
         if (!isValidUrl(apiUrl)) {
-          port.postMessage({ error: "Invalid API URL" });
-          port.disconnect();
+          safePortPost(port, { error: "Invalid API URL" });
+          safePortDisconnect(port);
           return;
         }
 
@@ -1112,8 +1696,8 @@ chrome.runtime.onConnect.addListener((port) => {
             if (!res.ok) {
               const errorText = await res.text();
               const friendlyError = getUserFriendlyErrorMessage({ message: `HTTP ${res.status}: ${errorText}` });
-              port.postMessage({ error: friendlyError });
-              port.disconnect();
+              safePortPost(port, { error: friendlyError });
+              safePortDisconnect(port);
               return;
             }
 
@@ -1124,18 +1708,18 @@ chrome.runtime.onConnect.addListener((port) => {
               try {
                 const { done, value } = await reader.read();
                 if (done) {
-                  port.postMessage({ done: true });
-                  port.disconnect();
+                  safePortPost(port, { done: true });
+                  safePortDisconnect(port);
                   return;
                 }
 
                 const chunk = decoder.decode(value, { stream: true });
-                port.postMessage({ chunk: chunk, done: false });
+                safePortPost(port, { chunk: chunk, done: false });
                 readChunk();
               } catch (error) {
                 const friendlyError = getUserFriendlyErrorMessage(error);
-                port.postMessage({ error: friendlyError, done: true });
-                port.disconnect();
+                safePortPost(port, { error: friendlyError, done: true });
+                safePortDisconnect(port);
               }
             };
 
@@ -1143,8 +1727,8 @@ chrome.runtime.onConnect.addListener((port) => {
           })
           .catch((error) => {
             const friendlyError = getUserFriendlyErrorMessage(error);
-            port.postMessage({ error: friendlyError });
-            port.disconnect();
+            safePortPost(port, { error: friendlyError });
+            safePortDisconnect(port);
           });
       }
     });

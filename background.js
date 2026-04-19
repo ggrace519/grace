@@ -1266,7 +1266,7 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
             else resolve(response || { data: [] });
           });
         });
-        reply(result.data ? { data: result.data } : { data: [] });
+        reply(Array.isArray(result.data) ? { data: result.data } : { data: [] });
       } catch (_) {
         reply({ data: [] });
       }

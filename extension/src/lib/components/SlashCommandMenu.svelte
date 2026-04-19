@@ -1,10 +1,12 @@
-<script lang="ts">
+<script context="module" lang="ts">
   export interface SlashCommand {
     name: string;
     description: string;
     action: () => void;
   }
+</script>
 
+<script lang="ts">
   export let inputValue: string = '';
   export let commands: SlashCommand[] = [];
   export let onExecute: (command: SlashCommand) => void = () => {};

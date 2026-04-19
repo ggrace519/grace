@@ -1766,12 +1766,10 @@ End of page content.
       await pingSidebarWake();
       await new Promise((r) => setTimeout(r, 600));
       const initResult = await getSidebarInit();
-      if (!initResult.error && (initResult.url != null || initResult.key != null || initResult.model != null)) {
+      if (!initResult.error && (initResult.url != null || initResult.key != null || initResult.activeModel != null)) {
         url = initResult.url ?? "";
         key = initResult.key ?? "";
-        model = initResult.model ?? "";
-        models = Array.isArray(initResult.models) ? initResult.models : [];
-        sidebarPageContext = typeof initResult.pageContent === "string" ? initResult.pageContent : "";
+        model = initResult.activeModel ?? "";
         showConfig = !(url && key && model);
         if (url && key) {
           // Ping again before these calls to keep worker warm
@@ -1899,8 +1897,9 @@ End of page content.
         <!-- Config Form -->
         <form on:submit={initHandler} class="tlwd-space-y-4">
           <div>
-            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Open WebUI URL</label>
+            <label for="sidebar-url" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Open WebUI URL</label>
             <input
+              id="sidebar-url"
               type="url"
               bind:value={url}
               placeholder="http://localhost:8080"
@@ -1909,8 +1908,9 @@ End of page content.
             />
           </div>
           <div>
-            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">API Key</label>
+            <label for="sidebar-key" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">API Key</label>
             <input
+              id="sidebar-key"
               type="password"
               bind:value={key}
               placeholder="Enter your API key"
@@ -1919,9 +1919,10 @@ End of page content.
             />
           </div>
           <div>
-            <label class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Model</label>
+            <label for="sidebar-model" class="tlwd-block tlwd-text-sm tlwd-text-gray-400 tlwd-mb-1">Model</label>
             <div class="tlwd-flex tlwd-gap-2">
               <select
+                id="sidebar-model"
                 bind:value={model}
                 class="tlwd-flex-1 tlwd-px-3 tlwd-py-2 tlwd-bg-gray-800 tlwd-text-white tlwd-border tlwd-border-gray-600 tlwd-rounded-lg tlwd-outline-none focus:tlwd-border-blue-500"
                 required

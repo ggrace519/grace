@@ -29,11 +29,13 @@ export function applyAppearance(settings: AppearanceSettings): void {
   root.setAttribute('data-grace-theme', resolveTheme(settings.theme));
   root.setAttribute('data-grace-density', settings.density);
   root.style.setProperty('--grace-accent', settings.accentColor);
-  const hex = settings.accentColor.replace('#', '');
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  root.style.setProperty('--grace-accent-bg', `rgba(${r}, ${g}, ${b}, 0.12)`);
+  const hexMatch = settings.accentColor.match(/^#([0-9a-fA-F]{6})$/);
+  if (hexMatch) {
+    const r = parseInt(hexMatch[1].slice(0, 2), 16);
+    const g = parseInt(hexMatch[1].slice(2, 4), 16);
+    const b = parseInt(hexMatch[1].slice(4, 6), 16);
+    root.style.setProperty('--grace-accent-bg', `rgba(${r}, ${g}, ${b}, 0.12)`);
+  }
 }
 
 export async function loadAndApplyAppearance(): Promise<AppearanceSettings> {

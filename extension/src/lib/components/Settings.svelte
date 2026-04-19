@@ -159,6 +159,7 @@
 
   async function updateAppearance(key: keyof AppearanceSettings, value: string) {
     appearance = { ...appearance, [key]: value };
+    if (key === 'accentColor') customAccent = value;
     applyAppearance(appearance);
     await new Promise((resolve) =>
       chrome.runtime.sendMessage({ action: 'saveAppearance', appearance }, resolve)

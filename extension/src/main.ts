@@ -28,6 +28,7 @@ function initApp(): InstanceType<typeof App> | null {
       return targetElement.__svelte_app as InstanceType<typeof App>;
     }
 
+    loadAndApplyAppearance().catch(() => {});
     const app = new App({
       target: targetElement,
     });
@@ -35,7 +36,6 @@ function initApp(): InstanceType<typeof App> | null {
     targetElement.__svelte_app = app;
     // Set global flag to prevent re-initialization
     window.__openwebui_extension_initialized = true;
-    loadAndApplyAppearance().catch(() => {});
     return app;
   } else {
     console.warn("Extension app target element not found, retrying...");

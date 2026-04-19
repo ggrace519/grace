@@ -180,16 +180,45 @@ function extractPageContentInTab() {
 
 if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    if (request.action !== "getPageContent") return false;
-    // Only main frame should respond so the side panel gets the tab's main page content.
+    // Only main frame responds to avoid duplicate replies from iframes
     if (window !== window.top) return false;
-    try {
-      const data = extractPageContentInTab();
-      sendResponse({ data: data || "" });
-    } catch (e) {
-      sendResponse({ error: (e && e.message) || "Failed to extract content" });
+
+    if (request.action === "getPageContent") {
+      try {
+        const data = extractPageContentInTab();
+        sendResponse({ data: data || "" });
+      } catch (e) {
+        sendResponse({ error: (e && e.message) || "Failed to extract content" });
+      }
+      return true;
     }
-    return true;
+
+    if (request.action === "getPageLinks") {
+      try {
+        const origin = window.location.origin;
+        const links = [];
+        const seen = new Set();
+        document.querySelectorAll('a[href]').forEach((a) => {
+          try {
+            const href = new URL(a.href, window.location.href).href;
+            if (!href.startsWith(origin)) return;
+            if (href === window.location.href) return;
+            if (href.startsWith(window.location.href + '#')) return;
+            if (seen.has(href)) return;
+            const text = (a.textContent || '').trim().replace(/\s+/g, ' ');
+            if (text.length < 10) return;
+            seen.add(href);
+            links.push({ href, text: text.substring(0, 120) });
+          } catch (_) {}
+        });
+        sendResponse({ data: links.slice(0, 20) });
+      } catch (e) {
+        sendResponse({ error: (e && e.message) || "Failed to collect links" });
+      }
+      return true;
+    }
+
+    return false;
   });
 }
 

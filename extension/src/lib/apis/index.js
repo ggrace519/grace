@@ -228,6 +228,21 @@ export const getActiveTabPageContent = async () => {
   }
 };
 
+/**
+ * Get same-origin links from the currently active browser tab.
+ * Returns up to 20 links: [{ href, text }]. Never rejects — returns { data: [] } on error.
+ */
+export const getPageLinks = async () => {
+  try {
+    const c = getChrome();
+    if (!c?.runtime?.sendMessage) return { data: [] };
+    const response = await sendMessageWithRetry({ action: 'getActiveTabPageLinks' });
+    return { data: Array.isArray(response?.data) ? response.data : [] };
+  } catch (_) {
+    return { data: [] };
+  }
+};
+
 export const generateOpenAIChatCompletion = async (
   api_key = "",
   body = {},

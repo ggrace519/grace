@@ -50,8 +50,8 @@ Changes apply immediately across all extension surfaces and persist in `chrome.s
 ### 1. Clone
 
 ```bash
-git clone https://github.com/ggrace519/extension.git
-cd extension
+git clone https://github.com/ggrace519/grace.git
+cd grace
 ```
 
 ### 2. Build

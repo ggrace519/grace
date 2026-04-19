@@ -1,0 +1,35 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    name: Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Claude Code Review
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          direct_prompt: |
+            Review this pull request for the Grace Chrome extension (Browser Integrated Conversation Engine).
+
+            Focus on:
+            - Bugs and correctness issues, especially around Chrome extension APIs (message passing, service worker lifecycle, port handling)
+            - Security: API key handling, SSRF, input validation, ALLOWED_ACTIONS whitelist
+            - Double-render / duplicate initialization risks (global flags, __svelte_app guards)
+            - CSS isolation — any selector that could leak into host-page styles
+            - Appearance system correctness (applyAppearance, resolveTheme, storage sync)
+            - Test coverage for new logic
+
+            Skip style nits. Flag anything that could break the extension or introduce a security regression.

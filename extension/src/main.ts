@@ -8,6 +8,7 @@
 
 import "./app.css";
 import App from "./App.svelte";
+import { loadAndApplyAppearance } from "./lib/appearance";
 
 function initApp(): InstanceType<typeof App> | null {
   // Only initialize in main frame to avoid duplicate processing when all_frames: true
@@ -34,6 +35,7 @@ function initApp(): InstanceType<typeof App> | null {
     targetElement.__svelte_app = app;
     // Set global flag to prevent re-initialization
     window.__openwebui_extension_initialized = true;
+    loadAndApplyAppearance().catch(() => {});
     return app;
   } else {
     console.warn("Extension app target element not found, retrying...");
